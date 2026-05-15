@@ -1,4 +1,7 @@
-use std::time::Instant;
+use std::{
+    io::{self, Write},
+    time::Instant,
+};
 
 use axum::{
     extract::Request,
@@ -7,6 +10,31 @@ use axum::{
     response::Response,
 };
 use serde::Serialize;
+
+const AUDIT_PREFIX: &str = "audit";
+
+
+pub fn enabled() -> bool {
+    #[cfg(test)]
+    {
+        return false;
+    }
+
+    match std::env::var("AUDIT_LOG") {
+        Ok(value) => {
+            let value = value.trim().to_ascii_lowercase();
+            value != "0" && value != "false" && value != "off" && value != "no"
+        }
+        Err(_) => true,
+    }
+}
+
+pub fn emit_startup_notice() {
+    if enabled() {
+        println!("{AUDIT_PREFIX}: request logging enabled (set AUDIT_LOG=0 to disable)");
+        let _ = io::stdout().flush();
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct AuditRecord<'a> {
@@ -20,6 +48,7 @@ struct AuditRecord<'a> {
 }
 
 pub async fn log_request(request: Request, next: Next) -> Response {
+    let audit_on = enabled();
     let method = request.method().as_str().to_owned();
     let path = redact_path(request.uri().path());
     let kind = route_kind(request.uri().path()).to_owned();
@@ -36,8 +65,12 @@ pub async fn log_request(request: Request, next: Next) -> Response {
         latency_ms: started.elapsed().as_millis(),
         client_ip: &client_ip,
     };
-    if let Ok(line) = serde_json::to_string(&record) {
-        eprintln!("{line}");
+    if audit_on {
+        if let Ok(line) = serde_json::to_string(&record) {
+            let mut out = io::stdout().lock();
+            let _ = writeln!(out, "{AUDIT_PREFIX} {line}");
+            let _ = out.flush();
+        }
     }
     response
 }

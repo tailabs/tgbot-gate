@@ -60,6 +60,7 @@ http://localhost:8080/admin
 | `DATA_PATH` | `data/bots.json` | Bot registry file path |
 | `ADMIN_PASSWORD` | generated at startup | Password for the admin console |
 | `ADMIN_DIST_DIR` | `admin/dist` | Built admin UI directory |
+| `AUDIT_LOG` | `1` (on) | Per-request JSON audit lines on stdout (`audit {...}`); set `0` to disable |
 
 If `ADMIN_PASSWORD` is not set, the service generates one at startup and prints it to the logs. Set a fixed password for production.
 

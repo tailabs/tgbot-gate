@@ -34,6 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
     let listener = TcpListener::bind(addr).await?;
 
+    audit::emit_startup_notice();
     println!("tgbot-gate listening on {addr}");
     axum::serve(listener, router).await?;
     Ok(())
