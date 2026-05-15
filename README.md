@@ -1,5 +1,7 @@
 # TG Bot Gate
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https%3A%2F%2Fgithub.com%2Ftailabs%2Ftgbot-gate)
+
 TG Bot Gate is a lightweight Telegram Bot API gateway. It lets you register bot tokens in a small admin console and proxies requests only for registered bots.
 
 The service is designed for simple self-hosting: one Rust backend, a built React admin UI, local disk storage, and Railway-friendly deployment.
