@@ -1,0 +1,14 @@
+.git
+target
+node_modules
+admin/node_modules
+admin/dist
+admin/.pnpm-store
+data
+.env
+.env.*
+*.log
+.DS_Store
+.codex
+.agents
+skills

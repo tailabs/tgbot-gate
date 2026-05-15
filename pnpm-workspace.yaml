@@ -1,0 +1,7 @@
+packages:
+  - admin
+
+nodeLinker: hoisted
+
+onlyBuiltDependencies:
+  - esbuild
