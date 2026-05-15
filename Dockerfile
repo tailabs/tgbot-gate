@@ -1,4 +1,4 @@
-FROM m.daocloud.io/docker.io/library/node:26.1.0-bookworm AS admin-builder
+FROM node:26.1.0-bookworm AS admin-builder
 
 WORKDIR /app
 COPY .npmrc pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -10,14 +10,14 @@ RUN corepack enable
 RUN pnpm install --filter tgbot-gate-admin --frozen-lockfile
 RUN pnpm --filter tgbot-gate-admin run build
 
-FROM m.daocloud.io/docker.io/library/rust:1.95.0-bookworm AS rust-builder
+FROM rust:1.95.0-bookworm AS rust-builder
 
 WORKDIR /app
 COPY Cargo.toml ./
 COPY src ./src
 RUN cargo build --release
 
-FROM m.daocloud.io/docker.io/library/debian:bookworm-slim
+FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
