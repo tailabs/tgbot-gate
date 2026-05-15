@@ -4,6 +4,7 @@ use std::{env, path::PathBuf};
 use axum::{
     body::{to_bytes, Body},
     extract::{Path, Request, State},
+    middleware,
     http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
@@ -16,6 +17,7 @@ use tokio::fs;
 use tower_http::services::ServeDir;
 
 use crate::{
+    audit,
     auth::AdminAuth,
     registry::{BotRecord, BotRegistry},
 };
@@ -102,6 +104,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/bots/{token_hash}", delete(delete_bot))
         .nest_service("/assets", ServeDir::new(assets_dir))
         .fallback(proxy_or_not_found)
+        .layer(middleware::from_fn(audit::log_request))
         .with_state(state)
 }
 
