@@ -1,5 +1,19 @@
-import { type SubmitEvent, useCallback, useEffect, useState } from "react";
+import { type ReactNode, type SubmitEvent, useCallback, useEffect, useState } from "react";
 import { Loader2, Save } from "lucide-react";
+import { api, ApiError } from "./lib/api";
+import {
+  Button,
+  NumberInput,
+  PageHeader,
+  Panel,
+  PanelBody,
+  PanelHeading,
+  SettingSwitch,
+  Status,
+  TextInput,
+  glassInset,
+} from "./components/ui";
+import { cn } from "./lib/cn";
 
 const MIN_BODY_MB = 1;
 const MAX_BODY_MB = 100;
@@ -18,37 +32,6 @@ type Notice = {
   text: string;
 };
 
-class ApiError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "content-type": "application/json",
-      ...init?.headers,
-    },
-    ...init,
-  });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new ApiError(response.status, message || `Request failed with ${response.status}`);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return response.json() as Promise<T>;
-}
-
 function bytesToMb(bytes: number): number {
   return Math.round(bytes / (1024 * 1024));
 }
@@ -65,7 +48,8 @@ export function SettingsSection({ active }: SettingsSectionProps) {
   const [form, setForm] = useState<GateSettings | null>(null);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isPasswordSaving, setIsPasswordSaving] = useState(false);
   const [notice, setNotice] = useState<Notice>({ kind: "idle", text: "" });
 
   const loadSettings = useCallback(async () => {
@@ -74,9 +58,7 @@ export function SettingsSection({ active }: SettingsSectionProps) {
   }, []);
 
   useEffect(() => {
-    if (!active) {
-      return;
-    }
+    if (!active) return;
     void loadSettings().catch(() => {
       setNotice({ kind: "error", text: "Could not load settings." });
     });
@@ -84,11 +66,9 @@ export function SettingsSection({ active }: SettingsSectionProps) {
 
   async function handleSaveSettings(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!form) {
-      return;
-    }
+    if (!form) return;
 
-    setIsLoading(true);
+    setIsSaving(true);
     setNotice({ kind: "idle", text: "" });
 
     try {
@@ -106,25 +86,21 @@ export function SettingsSection({ active }: SettingsSectionProps) {
       setForm(updated);
       setNotice({ kind: "success", text: "Settings saved. Changes apply immediately." });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Save failed.";
-      setNotice({ kind: "error", text: message });
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "Save failed." });
     } finally {
-      setIsLoading(false);
+      setIsSaving(false);
     }
   }
 
   async function handleChangePassword(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    setIsLoading(true);
+    setIsPasswordSaving(true);
     setNotice({ kind: "idle", text: "" });
 
     try {
       await api<void>("/api/settings/password", {
         method: "PUT",
-        body: JSON.stringify({
-          current_password: currentPassword,
-          new_password: newPassword,
-        }),
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
       });
       setCurrentPassword("");
       setNewPassword("");
@@ -138,158 +114,142 @@ export function SettingsSection({ active }: SettingsSectionProps) {
             : "Password update failed.";
       setNotice({ kind: "error", text: message });
     } finally {
-      setIsLoading(false);
+      setIsPasswordSaving(false);
     }
   }
 
-  if (!active) {
-    return null;
-  }
+  if (!active) return null;
 
   return (
-    <div className="settings-workspace">
-      <header className="page-header">
-        <h1 className="page-title">Settings</h1>
-      </header>
+    <div className="flex flex-col gap-3.5">
+      <PageHeader title="Settings" />
+      <Status kind={notice.kind} text={notice.text} />
 
-      {notice.kind !== "idle" ? (
-        <p className={`settings-banner settings-banner--${notice.kind}`} role="status">
-          {notice.text}
-        </p>
-      ) : null}
+      <form className="flex flex-col gap-3.5" onSubmit={handleSaveSettings}>
+        <Panel>
+          <PanelHeading title="Audit" description="Proxy traffic logging and SQLite capture." />
+          <PanelBody className="flex flex-col gap-3.5">
+            {form ? (
+              <>
+                <ul className={cn(glassInset)} aria-label="Audit options">
+                  <SettingSwitch
+                    label="Stdout JSON log"
+                    hint="Log /bot requests to server stdout"
+                    checked={form.audit_log}
+                    onChange={(audit_log) => setForm({ ...form, audit_log })}
+                  />
+                  <SettingSwitch
+                    label="Database capture"
+                    hint="Persist request and response bodies to SQLite"
+                    checked={form.audit_capture}
+                    onChange={(audit_capture) => setForm({ ...form, audit_capture })}
+                  />
+                  <SettingSwitch
+                    label="Errors only"
+                    hint="HTTP status 400 and above"
+                    checked={form.audit_errors_only}
+                    disabled={!form.audit_capture}
+                    onChange={(audit_errors_only) => setForm({ ...form, audit_errors_only })}
+                  />
+                </ul>
+                <div
+                  className={cn(
+                    "grid gap-3.5 sm:grid-cols-2",
+                    !form.audit_capture && "pointer-events-none opacity-45",
+                  )}
+                >
+                  <NumberInput
+                    label="Retention (days)"
+                    min={1}
+                    max={365}
+                    value={form.audit_retention_days}
+                    disabled={!form.audit_capture}
+                    onChange={(audit_retention_days) =>
+                      setForm({ ...form, audit_retention_days: audit_retention_days || 1 })
+                    }
+                  />
+                  <NumberInput
+                    label="Max body (MB)"
+                    min={MIN_BODY_MB}
+                    max={MAX_BODY_MB}
+                    value={bytesToMb(form.audit_max_body_bytes)}
+                    disabled={!form.audit_capture}
+                    onChange={(mb) =>
+                      setForm({ ...form, audit_max_body_bytes: mbToBytes(mb || MIN_BODY_MB) })
+                    }
+                  />
+                </div>
+              </>
+            ) : (
+              <p className="m-0 text-sm text-zinc-500">Loading…</p>
+            )}
+          </PanelBody>
+        </Panel>
 
-      <div className="content-stack">
-        <section className="panel material">
-          <div className="panel-head">
-            <h2 className="panel-title">Audit</h2>
-            <p className="panel-desc">Proxy traffic logging and SQLite capture.</p>
-          </div>
-          {form ? (
-            <form className="settings-form" onSubmit={handleSaveSettings}>
-              <label className="settings-toggle">
-                <input
-                  type="checkbox"
-                  checked={form.audit_log}
-                  onChange={(event) => setForm({ ...form, audit_log: event.target.checked })}
-                />
-                <span>Stdout JSON log for /bot requests</span>
-              </label>
-              <label className="settings-toggle">
-                <input
-                  type="checkbox"
-                  checked={form.audit_capture}
-                  onChange={(event) => setForm({ ...form, audit_capture: event.target.checked })}
-                />
-                <span>Persist request/response bodies to database</span>
-              </label>
-              <label className="settings-toggle">
-                <input
-                  type="checkbox"
-                  checked={form.audit_errors_only}
-                  disabled={!form.audit_capture}
-                  onChange={(event) => setForm({ ...form, audit_errors_only: event.target.checked })}
-                />
-                <span>Capture errors only (HTTP status ≥ 400)</span>
-              </label>
-              <label className="settings-field">
-                <span>Retention (days)</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={365}
-                  value={form.audit_retention_days}
-                  disabled={!form.audit_capture}
-                  onChange={(event) =>
-                    setForm({ ...form, audit_retention_days: Number(event.target.value) || 1 })
-                  }
-                />
-              </label>
-              <label className="settings-field">
-                <span>Max audit body (MB)</span>
-                <input
-                  type="number"
-                  min={MIN_BODY_MB}
-                  max={MAX_BODY_MB}
-                  value={bytesToMb(form.audit_max_body_bytes)}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      audit_max_body_bytes: mbToBytes(Number(event.target.value) || MIN_BODY_MB),
-                    })
-                  }
-                />
-              </label>
-              <button className="button primary button--md" type="submit" disabled={isLoading}>
-                {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} strokeWidth={1.75} />}
-                <span className="button-label">Save audit settings</span>
-              </button>
-            </form>
-          ) : null}
-        </section>
+        <Panel>
+          <PanelHeading title="Proxy" description="Limits for forwarded Telegram API requests." />
+          <PanelBody>
+            {form ? (
+              <NumberInput
+                label="Max request body (MB)"
+                min={MIN_BODY_MB}
+                max={MAX_BODY_MB}
+                value={bytesToMb(form.max_proxy_body_bytes)}
+                onChange={(mb) =>
+                  setForm({ ...form, max_proxy_body_bytes: mbToBytes(mb || MIN_BODY_MB) })
+                }
+              />
+            ) : (
+              <p className="m-0 text-sm text-zinc-500">Loading…</p>
+            )}
+          </PanelBody>
+        </Panel>
 
-        <section className="panel material">
-          <div className="panel-head">
-            <h2 className="panel-title">Proxy</h2>
-            <p className="panel-desc">Limits for forwarded Telegram API requests.</p>
-          </div>
-          {form ? (
-            <form className="settings-form" onSubmit={handleSaveSettings}>
-              <label className="settings-field">
-                <span>Max request body (MB)</span>
-                <input
-                  type="number"
-                  min={MIN_BODY_MB}
-                  max={MAX_BODY_MB}
-                  value={bytesToMb(form.max_proxy_body_bytes)}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      max_proxy_body_bytes: mbToBytes(Number(event.target.value) || MIN_BODY_MB),
-                    })
-                  }
-                />
-              </label>
-              <button className="button primary button--md" type="submit" disabled={isLoading}>
-                {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} strokeWidth={1.75} />}
-                <span className="button-label">Save proxy settings</span>
-              </button>
-            </form>
-          ) : null}
-        </section>
+        <div className="flex justify-end">
+          <Button
+            className="w-full sm:w-auto sm:min-w-[168px]"
+            disabled={isSaving || !form}
+            icon={
+              isSaving ? (
+                <Loader2 size={18} className="animate-spin" />
+              ) : (
+                <Save size={18} strokeWidth={1.75} />
+              )
+            }
+          >
+            {isSaving ? "Saving…" : "Save changes"}
+          </Button>
+        </div>
+      </form>
 
-        <section className="panel material">
-          <div className="panel-head">
-            <h2 className="panel-title">Admin password</h2>
-            <p className="panel-desc">Stored as a hash in the database.</p>
-          </div>
-          <form className="settings-form" onSubmit={handleChangePassword}>
-            <label className="settings-field">
-              <span>Current password</span>
-              <input
+      <Panel>
+        <PanelHeading title="Admin password" description="Stored as a SHA-256 hash in the database." />
+        <PanelBody>
+          <form className="flex flex-col gap-3.5" onSubmit={handleChangePassword}>
+            <div className="grid gap-3.5 sm:grid-cols-2">
+              <TextInput
+                label="Current password"
                 type="password"
                 autoComplete="current-password"
                 value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
+                onChange={setCurrentPassword}
                 required
               />
-            </label>
-            <label className="settings-field">
-              <span>New password</span>
-              <input
+              <TextInput
+                label="New password"
                 type="password"
                 autoComplete="new-password"
-                minLength={8}
                 value={newPassword}
-                onChange={(event) => setNewPassword(event.target.value)}
+                onChange={setNewPassword}
                 required
               />
-            </label>
-            <button className="button secondary button--md" type="submit" disabled={isLoading}>
-              Update password
-            </button>
+            </div>
+            <Button variant="secondary" className="w-full sm:w-auto" disabled={isPasswordSaving} type="submit">
+              {isPasswordSaving ? "Updating…" : "Update password"}
+            </Button>
           </form>
-        </section>
-      </div>
+        </PanelBody>
+      </Panel>
     </div>
   );
 }

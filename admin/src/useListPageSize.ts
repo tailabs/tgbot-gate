@@ -23,7 +23,7 @@ export function useListPageSize(
 ): ListPageSize {
   const min = options.min ?? DEFAULT_MIN;
   const max = options.max ?? DEFAULT_MAX;
-  const rowSelector = options.rowSelector ?? ".grouped-row";
+  const rowSelector = options.rowSelector ?? "[data-list-row]";
   const fallbackRowHeight = options.fallbackRowHeight ?? DEFAULT_ROW_HEIGHT;
   const [pageSize, setPageSize] = useState(6);
   const [ready, setReady] = useState(false);

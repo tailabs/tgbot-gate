@@ -1,7 +1,19 @@
-import { KeyboardEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Search } from "lucide-react";
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown, RefreshCw, Search } from "lucide-react";
 import { prettifyAuditBody } from "./auditFormat";
 import { useListPageSize } from "./useListPageSize";
+import { api, ApiError, withMinRefreshDuration } from "./lib/api";
+import {
+  EmptyState,
+  IconButton,
+  PageHeader,
+  PaginationBar,
+  Panel,
+  PanelBody,
+  Status,
+  glassInset,
+} from "./components/ui";
+import { cn } from "./lib/cn";
 
 export type AuditListItem = {
   shard: string;
@@ -37,57 +49,37 @@ type Notice = {
   text: string;
 };
 
-class ApiError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-const MIN_REFRESH_MS = 450;
-
-async function withMinRefreshDuration(run: () => Promise<void>): Promise<void> {
-  const started = Date.now();
-  await run();
-  const remaining = MIN_REFRESH_MS - (Date.now() - started);
-  if (remaining > 0) {
-    await new Promise((resolve) => setTimeout(resolve, remaining));
-  }
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "content-type": "application/json",
-      ...init?.headers,
-    },
-    ...init,
-  });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new ApiError(response.status, message || `Request failed with ${response.status}`);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return response.json() as Promise<T>;
-}
-
 type AuditSectionProps = {
   active: boolean;
 };
+
+function statusTone(status: number): "ok" | "warn" | "error" {
+  if (status >= 500) return "error";
+  if (status >= 400) return "warn";
+  return "ok";
+}
+
+const statusClass = {
+  ok: "bg-green-500/15 text-green-700 dark:text-green-400",
+  warn: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  error: "bg-red-500/15 text-red-600 dark:text-red-400",
+};
+
+function formatAuditTime(tsMs: number): string {
+  return new Date(tsMs).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
 
 export function AuditSection({ active }: AuditSectionProps) {
   const listViewportRef = useRef<HTMLDivElement>(null);
   const { pageSize, ready: layoutReady } = useListPageSize(listViewportRef, {
     max: 50,
-    rowSelector: ".audit-row:not(.audit-row--expanded)",
+    rowSelector: "[data-audit-row]:not([data-expanded])",
     fallbackRowHeight: 68,
   });
 
@@ -107,10 +99,7 @@ export function AuditSection({ active }: AuditSectionProps) {
       const status = await api<AuditStatusResponse>("/api/audit/status");
       setCaptureEnabled(status.enabled);
       if (!status.enabled) {
-        setNotice({
-          kind: "info",
-          text: "Audit capture is off. Enable it in Settings.",
-        });
+        setNotice({ kind: "info", text: "Audit capture is off. Enable it in Settings." });
         setEntries([]);
         setTotal(0);
         setTotalPages(1);
@@ -125,9 +114,7 @@ export function AuditSection({ active }: AuditSectionProps) {
 
   const loadEntries = useCallback(
     async (targetPage = page) => {
-      if (!captureEnabled) {
-        return;
-      }
+      if (!captureEnabled) return;
 
       setIsRefreshing(true);
       try {
@@ -135,9 +122,7 @@ export function AuditSection({ active }: AuditSectionProps) {
           const params = new URLSearchParams();
           params.set("page", String(targetPage));
           params.set("page_size", String(Math.max(1, pageSize)));
-          if (search.trim()) {
-            params.set("q", search.trim());
-          }
+          if (search.trim()) params.set("q", search.trim());
           const data = await api<AuditListResponse>(`/api/audit?${params.toString()}`);
           setEntries(data.entries);
           setPage(data.page);
@@ -168,26 +153,18 @@ export function AuditSection({ active }: AuditSectionProps) {
   );
 
   useEffect(() => {
-    if (!active) {
-      return;
-    }
+    if (!active) return;
     void loadStatus();
   }, [active, loadStatus]);
 
   useEffect(() => {
-    if (!active || captureEnabled !== true || !layoutReady) {
-      return;
-    }
+    if (!active || captureEnabled !== true || !layoutReady) return;
     void loadEntries(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, captureEnabled, layoutReady]);
 
   useEffect(() => {
-    if (!active || captureEnabled !== true || !layoutReady) {
-      return;
-    }
+    if (!active || captureEnabled !== true || !layoutReady) return;
     void loadEntries(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageSize]);
 
   function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -197,22 +174,22 @@ export function AuditSection({ active }: AuditSectionProps) {
     }
   }
 
-  return (
-    <div className="audit-workspace">
-      <header className="page-header">
-        <h1 className="page-title">Audit</h1>
-      </header>
+  if (!active) return null;
 
-      <section className="audit-panel material" aria-labelledby="audit-panel-title">
-        <div className="audit-panel-toolbar">
-          <h2 id="audit-panel-title" className="audit-panel-title">
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3.5">
+      <PageHeader title="Audit" />
+
+      <Panel className="flex min-h-0 flex-1 flex-col">
+        <div className="border-b border-black/6 px-[18px] py-3 dark:border-white/8">
+          <h2 className="m-0 text-[13px] font-semibold tracking-[0.08em] text-zinc-500 uppercase">
             Captured requests
           </h2>
         </div>
 
-        <div className="audit-panel-filters">
-          <label className="audit-search">
-            <Search size={16} strokeWidth={2} className="audit-search-icon" aria-hidden />
+        <div className="flex flex-wrap items-center gap-2 border-b border-black/6 px-[18px] py-3 dark:border-white/8">
+          <label className="flex min-h-10 min-w-[200px] flex-1 items-center gap-2 rounded-[10px] border border-black/6 bg-black/4 px-3 dark:border-white/10 dark:bg-white/6">
+            <Search size={16} strokeWidth={2} className="shrink-0 text-zinc-500" aria-hidden />
             <span className="sr-only">Search audit log</span>
             <input
               type="search"
@@ -222,31 +199,29 @@ export function AuditSection({ active }: AuditSectionProps) {
               placeholder="Search path, IP, body…"
               aria-label="Search audit log"
               disabled={captureEnabled === false}
+              className="min-w-0 flex-1 border-0 bg-transparent outline-none"
             />
           </label>
           <IconButton
-              label="Refresh audit"
-              className={isRefreshing ? "icon-btn--refreshing" : ""}
-              busy={isRefreshing}
-              onClick={() => void (captureEnabled ? loadEntries(page) : loadStatus())}
-              variant="toolbar"
-            >
-              <RefreshCw size={15} strokeWidth={2} aria-hidden />
-            </IconButton>
+            label="Refresh audit"
+            busy={isRefreshing}
+            variant="toolbar"
+            onClick={() => void (captureEnabled ? loadEntries(page) : loadStatus())}
+          >
+            <RefreshCw size={15} strokeWidth={2} aria-hidden />
+          </IconButton>
         </div>
 
         {notice.text ? (
-          <p className={`audit-banner audit-banner--${notice.kind}`} role="status">
-            {notice.text}
-          </p>
+          <div className="px-[18px] pt-3">
+            <Status kind={notice.kind} text={notice.text} />
+          </div>
         ) : null}
 
-        <div className="audit-panel-body">
-          <div className="list-viewport" ref={listViewportRef}>
+        <PanelBody className="flex min-h-0 flex-1 flex-col gap-3">
+          <div className="min-h-0 flex-1 overflow-y-auto" ref={listViewportRef}>
             {captureEnabled === null ? (
-              <div className="empty-state material-inset">
-                <p className="empty-title">Loading…</p>
-              </div>
+              <EmptyState title="Loading…" />
             ) : (
               <AuditList
                 entries={entries}
@@ -260,9 +235,7 @@ export function AuditSection({ active }: AuditSectionProps) {
                     return;
                   }
                   setExpandedKey(key);
-                  if (details[key]) {
-                    return;
-                  }
+                  if (details[key]) return;
                   try {
                     const detail = await api<AuditDetail>(`/api/audit/${item.shard}/${item.id}`);
                     setDetails((current) => ({ ...current, [key]: detail }));
@@ -273,7 +246,6 @@ export function AuditSection({ active }: AuditSectionProps) {
               />
             )}
           </div>
-
           {captureEnabled && totalPages > 1 ? (
             <PaginationBar
               page={page}
@@ -284,104 +256,10 @@ export function AuditSection({ active }: AuditSectionProps) {
               onNext={() => void loadEntries(page + 1)}
             />
           ) : null}
-        </div>
-      </section>
+        </PanelBody>
+      </Panel>
     </div>
   );
-}
-
-function PaginationBar({
-  page,
-  totalPages,
-  total,
-  disabled,
-  onPrevious,
-  onNext,
-}: {
-  page: number;
-  totalPages: number;
-  total: number;
-  disabled?: boolean;
-  onPrevious: () => void;
-  onNext: () => void;
-}) {
-  const canGoBack = page > 1 && !disabled;
-  const canGoForward = page < totalPages && !disabled;
-
-  return (
-    <nav className="list-pagination" aria-label="Pagination">
-      <div className="pagination-shell">
-        <IconButton label="Previous page" variant="toolbar" disabled={!canGoBack} onClick={onPrevious}>
-          <ChevronLeft size={16} strokeWidth={2.25} aria-hidden />
-        </IconButton>
-        <div className="pagination-center" aria-live="polite">
-          <p className="pagination-page">
-            <span className="pagination-page-current">{page}</span>
-            <span className="pagination-page-sep">/</span>
-            <span className="pagination-page-total">{totalPages}</span>
-          </p>
-          <p className="pagination-meta">{total} entries</p>
-        </div>
-        <IconButton label="Next page" variant="toolbar" disabled={!canGoForward} onClick={onNext}>
-          <ChevronRight size={16} strokeWidth={2.25} aria-hidden />
-        </IconButton>
-      </div>
-    </nav>
-  );
-}
-
-function IconButton({
-  busy = false,
-  children,
-  className = "",
-  disabled,
-  label,
-  onClick,
-  variant = "default",
-}: {
-  busy?: boolean;
-  children: ReactNode;
-  className?: string;
-  disabled?: boolean;
-  label: string;
-  onClick: () => void;
-  variant?: "default" | "toolbar";
-}) {
-  const variantClass = variant === "toolbar" ? "icon-btn icon-btn--toolbar" : "icon-btn";
-  const isDisabled = disabled || busy;
-  return (
-    <button
-      type="button"
-      className={`${variantClass} ${className}`.trim()}
-      disabled={isDisabled}
-      onClick={onClick}
-      aria-busy={busy}
-      aria-label={label}
-      title={label}
-    >
-      {children}
-    </button>
-  );
-}
-
-function statusTone(status: number): "ok" | "warn" | "error" {
-  if (status >= 500) {
-    return "error";
-  }
-  if (status >= 400) {
-    return "warn";
-  }
-  return "ok";
-}
-
-function formatAuditTime(tsMs: number): string {
-  return new Date(tsMs).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
 }
 
 function AuditList({
@@ -398,65 +276,87 @@ function AuditList({
   onToggle: (item: AuditListItem) => Promise<void>;
 }) {
   if (entries.length === 0) {
-    return (
-      <div className="empty-state material-inset">
-        <p className="empty-title">No audit entries</p>
-      </div>
-    );
+    return <EmptyState title="No audit entries" />;
   }
 
   return (
-    <ul className="grouped-list grouped-list--inset" aria-label="Audit log">
+    <ul className={cn(glassInset, "divide-y divide-black/6 dark:divide-white/8")} aria-label="Audit log">
       {entries.map((entry) => {
         const key = `${entry.shard}:${entry.id}`;
         const expanded = expandedKey === key;
         const detail = details[key];
+        const tone = statusTone(entry.status);
         return (
-          <li key={key} className={`grouped-row audit-row${expanded ? " audit-row--expanded" : ""}`}>
+          <li
+            key={key}
+            data-audit-row
+            data-expanded={expanded ? "" : undefined}
+            className={cn(expanded && "bg-black/3 dark:bg-white/4")}
+          >
             <button
               type="button"
-              className="audit-row-toggle"
+              className="w-full px-4 py-3 text-left disabled:opacity-50"
               aria-expanded={expanded}
               onClick={() => void onToggle(entry)}
               disabled={isLoading}
             >
-              <div className="audit-row-head">
-                <span className={`audit-status audit-status--${statusTone(entry.status)}`}>{entry.status}</span>
-                <div className="audit-row-primary">
-                  <span className="audit-method">{entry.method}</span>
-                  <span className="audit-path" title={entry.path}>
-                    {entry.path}
-                  </span>
+              <div className="flex items-start gap-2.5">
+                <span
+                  className={cn(
+                    "inline-flex min-w-10 shrink-0 items-center justify-center rounded-md px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums",
+                    statusClass[tone],
+                  )}
+                >
+                  {entry.status}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="font-mono text-xs font-semibold text-zinc-500">{entry.method}</span>
+                    <span className="truncate font-mono text-sm text-zinc-800 dark:text-zinc-100" title={entry.path}>
+                      {entry.path}
+                    </span>
+                  </div>
+                  <p className="m-0 mt-1 text-xs text-zinc-500">{entry.client_ip}</p>
                 </div>
-                <div className="audit-row-trail">
-                  <div className="audit-row-metrics">
-                    <span className="audit-latency">{entry.latency_ms} ms</span>
-                    <time className="audit-time" dateTime={new Date(entry.ts_ms).toISOString()}>
+                <div className="flex shrink-0 items-center gap-2 text-right text-xs text-zinc-500">
+                  <div>
+                    <p className="m-0 tabular-nums">{entry.latency_ms} ms</p>
+                    <time className="m-0 block" dateTime={new Date(entry.ts_ms).toISOString()}>
                       {formatAuditTime(entry.ts_ms)}
                     </time>
                   </div>
-                  <ChevronDown size={16} strokeWidth={2} className="audit-row-chevron" aria-hidden />
+                  <ChevronDown
+                    size={16}
+                    strokeWidth={2}
+                    className={cn("transition-transform", expanded && "rotate-180")}
+                    aria-hidden
+                  />
                 </div>
               </div>
-              <p className="audit-row-sub">
-                <span className="audit-client">{entry.client_ip}</span>
-              </p>
             </button>
             {expanded ? (
-              <div className="audit-detail" aria-label="Request and response bodies">
+              <div className="space-y-3 border-t border-black/6 px-4 pb-4 dark:border-white/8">
                 {detail ? (
                   <>
-                    <section className="audit-detail-pane">
-                      <h3 className="audit-detail-heading">Request</h3>
-                      <pre className="audit-body">{prettifyAuditBody(detail.request_body)}</pre>
+                    <section>
+                      <h3 className="m-0 mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+                        Request
+                      </h3>
+                      <pre className="m-0 max-h-64 overflow-auto rounded-lg bg-black/5 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all dark:bg-white/6">
+                        {prettifyAuditBody(detail.request_body)}
+                      </pre>
                     </section>
-                    <section className="audit-detail-pane">
-                      <h3 className="audit-detail-heading">Response</h3>
-                      <pre className="audit-body">{prettifyAuditBody(detail.response_body)}</pre>
+                    <section>
+                      <h3 className="m-0 mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+                        Response
+                      </h3>
+                      <pre className="m-0 max-h-64 overflow-auto rounded-lg bg-black/5 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all dark:bg-white/6">
+                        {prettifyAuditBody(detail.response_body)}
+                      </pre>
                     </section>
                   </>
                 ) : (
-                  <p className="audit-detail-loading">Loading bodies…</p>
+                  <p className="m-0 text-sm text-zinc-500">Loading bodies…</p>
                 )}
               </div>
             ) : null}

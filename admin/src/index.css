@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue",
+    sans-serif;
+  --font-mono: "SF Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply min-h-full bg-zinc-300/90 font-sans text-[15px] leading-snug text-zinc-900 antialiased dark:bg-black dark:text-zinc-100;
+    background-image:
+      radial-gradient(100% 90% at 50% -15%, rgb(255 255 255 / 0.55), transparent 45%),
+      linear-gradient(175deg, rgb(232 232 236) 0%, rgb(205 207 214) 100%);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    body {
+      background-image:
+        radial-gradient(90% 70% at 50% 0%, rgb(80 80 92 / 0.35), transparent 50%),
+        linear-gradient(180deg, rgb(12 12 14) 0%, rgb(0 0 0) 100%);
+    }
+  }
+
+  button,
+  input {
+    font: inherit;
+    color: inherit;
+  }
+}

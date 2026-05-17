@@ -1,13 +1,4 @@
-import React, {
-  KeyboardEvent,
-  ReactNode,
-  type SubmitEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { type SubmitEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
@@ -18,18 +9,34 @@ import {
   Loader2,
   LockKeyhole,
   Plus,
-  ChevronLeft,
-  ChevronRight,
   RefreshCw,
-  ShieldCheck,
-  Trash2,
   ScrollText,
   Settings,
+  ShieldCheck,
+  Trash2,
 } from "lucide-react";
-import "./styles.css";
+import "./index.css";
 import { useListPageSize } from "./useListPageSize";
 import { AuditSection } from "./AuditSection";
 import { SettingsSection } from "./SettingsSection";
+import { api, withMinRefreshDuration } from "./lib/api";
+import {
+  Button,
+  EmptyState,
+  IconButton,
+  MetricCard,
+  NavButton,
+  PageHeader,
+  PaginationBar,
+  Panel,
+  PanelBody,
+  PanelHeading,
+  Status,
+  TextInput,
+  glass,
+  glassInset,
+} from "./components/ui";
+import { cn } from "./lib/cn";
 
 type BotRecord = {
   token_hash: string;
@@ -47,48 +54,6 @@ type Notice = {
 };
 
 type AppSection = "bots" | "audit" | "settings";
-
-const MIN_REFRESH_MS = 450;
-
-async function withMinRefreshDuration(run: () => Promise<void>): Promise<void> {
-  const started = Date.now();
-  await run();
-  const remaining = MIN_REFRESH_MS - (Date.now() - started);
-  if (remaining > 0) {
-    await new Promise((resolve) => setTimeout(resolve, remaining));
-  }
-}
-
-class ApiError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "content-type": "application/json",
-      ...init?.headers,
-    },
-    ...init,
-  });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new ApiError(response.status, message || `Request failed with ${response.status}`);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return response.json() as Promise<T>;
-}
 
 function App() {
   const reduceMotion = useReducedMotion();
@@ -220,21 +185,23 @@ function App() {
       {!isSignedIn ? (
         <motion.div
           key="login"
-          className="login-shell"
+          className="flex min-h-dvh items-center justify-center p-6"
           initial={reduceMotion ? false : { opacity: 0, scale: 0.98 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={reduceMotion ? undefined : { opacity: 0, scale: 0.98 }}
           transition={pageTransition}
         >
-          <main className="login-center">
-            <section className="login-panel material" aria-labelledby="login-title">
-              <motion.div className="login-brand">
-                <div className="icon-slot icon-slot--accent" aria-hidden>
+          <main className="w-full max-w-md">
+            <section className={cn(glass, "p-6")} aria-labelledby="login-title">
+              <motion.div className="mb-6 flex flex-col items-center gap-3 text-center">
+                <span className="inline-flex size-11 items-center justify-center rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
                   <ShieldCheck size={22} strokeWidth={1.75} />
-                </div>
-                <h1 id="login-title">TG Bot Gate</h1>
+                </span>
+                <h1 id="login-title" className="m-0 text-2xl font-semibold tracking-tight">
+                  TG Bot Gate
+                </h1>
               </motion.div>
-              <form onSubmit={handleLogin} className="stack">
+              <form onSubmit={handleLogin} className="flex flex-col gap-3.5">
                 <TextInput
                   icon={<LockKeyhole size={18} strokeWidth={1.75} />}
                   label="Password"
@@ -248,318 +215,166 @@ function App() {
                   {isLoading ? "…" : "Sign In"}
                 </Button>
               </form>
-              <Status notice={notice} />
+              <Status kind={notice.kind} text={notice.text} />
             </section>
           </main>
         </motion.div>
       ) : (
         <motion.div
           key="app"
-          className="chrome"
+          className="flex min-h-dvh flex-col md:flex-row"
           initial={reduceMotion ? false : { opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           exit={reduceMotion ? undefined : { opacity: 0, y: 8 }}
           transition={pageTransition}
         >
-          <aside className="sidebar material-sidebar" aria-label="Application">
-            <div className="sidebar-brand">
-              <div className="icon-slot icon-slot--sm" aria-hidden>
+          <aside
+            className={cn(glass, "flex shrink-0 flex-col gap-4 p-4 md:w-56 md:rounded-none md:rounded-r-2xl")}
+            aria-label="Application"
+          >
+            <div className="flex items-center gap-2.5 px-1">
+              <span className="inline-flex size-8 items-center justify-center rounded-lg border border-black/6 bg-black/5 dark:border-white/10 dark:bg-white/8">
                 <ShieldCheck size={18} strokeWidth={1.75} />
-              </div>
-              <span className="sidebar-title">TG Bot Gate</span>
+              </span>
+              <span className="text-[15px] font-semibold tracking-tight">TG Bot Gate</span>
             </div>
-            <nav className="sidebar-nav" aria-label="Primary">
-              <button type="button" className={`nav-item ${section === "bots" ? "nav-item-active" : ""}`} aria-current={section === "bots" ? "page" : undefined} onClick={() => setSection("bots")}>
-                <LayoutDashboard size={17} strokeWidth={1.75} aria-hidden />
+            <nav className="flex flex-col gap-1" aria-label="Primary">
+              <NavButton
+                active={section === "bots"}
+                icon={<LayoutDashboard size={17} strokeWidth={1.75} />}
+                onClick={() => setSection("bots")}
+              >
                 Bots
-              </button>
-              <button type="button" className={`nav-item ${section === "audit" ? "nav-item-active" : ""}`} aria-current={section === "audit" ? "page" : undefined} onClick={() => setSection("audit")}>
-                <ScrollText size={17} strokeWidth={1.75} aria-hidden />
+              </NavButton>
+              <NavButton
+                active={section === "audit"}
+                icon={<ScrollText size={17} strokeWidth={1.75} />}
+                onClick={() => setSection("audit")}
+              >
                 Audit
-              </button>
-              <button type="button" className={`nav-item ${section === "settings" ? "nav-item-active" : ""}`} aria-current={section === "settings" ? "page" : undefined} onClick={() => setSection("settings")}>
-                <Settings size={17} strokeWidth={1.75} aria-hidden />
+              </NavButton>
+              <NavButton
+                active={section === "settings"}
+                icon={<Settings size={17} strokeWidth={1.75} />}
+                onClick={() => setSection("settings")}
+              >
                 Settings
-              </button>
+              </NavButton>
             </nav>
           </aside>
 
-          <div className="main-column main-column--fill">
+          <motion.div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 md:p-6">
             {section === "bots" ? (
-              <div className="bots-workspace">
-            <header className="page-header">
-              <h1 className="page-title">Bots</h1>
-              <IconButton
-                label="Refresh"
-                className={isRefreshingBots ? "icon-btn--refreshing" : ""}
-                busy={isRefreshingBots}
-                onClick={() => void loadBots().catch(() => setNotice({ kind: "error", text: "Refresh failed." }))}
-                variant="toolbar"
-              >
-                <RefreshCw size={15} strokeWidth={2} aria-hidden />
-              </IconButton>
-            </header>
+              <motion.div className="flex min-h-0 flex-1 flex-col gap-3.5">
+                <PageHeader
+                  title="Bots"
+                  action={
+                    <IconButton
+                      label="Refresh"
+                      variant="toolbar"
+                      busy={isRefreshingBots}
+                      onClick={() =>
+                        void loadBots().catch(() => setNotice({ kind: "error", text: "Refresh failed." }))
+                      }
+                    >
+                      <RefreshCw
+                        size={15}
+                        strokeWidth={2}
+                        className={cn(isRefreshingBots && "animate-spin")}
+                        aria-hidden
+                      />
+                    </IconButton>
+                  }
+                />
 
-            <div className="metrics-strip material">
-              <StatTile icon={<Bot size={18} strokeWidth={1.75} />} label="Count" value={bots.length.toString()} />
-              <StatTile icon={<ShieldCheck size={18} strokeWidth={1.75} />} label="Storage" value="Hashed" />
-              <EndpointTile />
-            </div>
-
-            <div className="content-stack content-stack--fill">
-              <Panel title="Add" className="panel--compact">
-                <form onSubmit={handleRegister} className="register-form">
-                  <TextInput label="Name" value={label} onChange={setLabel} placeholder="Label" required />
-                  <TextInput label="Token" value={token} onChange={setToken} placeholder="Bot token" required />
-                  <Button disabled={isLoading} icon={<Plus size={18} strokeWidth={1.75} />} type="submit">
-                    Add
-                  </Button>
-                </form>
-                <Status notice={notice} />
-              </Panel>
-
-              <Panel title="List" className="panel--fill">
-                <div className="list-viewport" ref={botsListViewportRef}>
-                  <BotList bots={paginatedBots} isLoading={isLoading} onDelete={handleDelete} measureRow={sortedBots.length === 0} />
-                </div>
-                {sortedBots.length > botsPageSize ? (
-                  <PaginationBar
-                    page={Math.min(botsPage, botsTotalPages)}
-                    totalPages={botsTotalPages}
-                    total={sortedBots.length}
-                    disabled={isLoading || isRefreshingBots}
-                    onPrevious={() => setBotsPage((current) => Math.max(1, current - 1))}
-                    onNext={() => setBotsPage((current) => Math.min(botsTotalPages, current + 1))}
+                <div className="grid gap-2.5 sm:grid-cols-3">
+                  <MetricCard
+                    icon={<Bot size={18} strokeWidth={1.75} />}
+                    label="Count"
+                    value={bots.length.toString()}
                   />
-                ) : null}
-              </Panel>
-            </div>
-              </div>
+                  <MetricCard
+                    icon={<ShieldCheck size={18} strokeWidth={1.75} />}
+                    label="Storage"
+                    value="Hashed"
+                  />
+                  <EndpointMetricCard />
+                </div>
+
+                <div className="grid min-h-0 flex-1 gap-3.5 lg:grid-cols-[minmax(0,280px)_1fr]">
+                  <Panel>
+                    <PanelHeading title="Add" />
+                    <PanelBody>
+                      <form onSubmit={handleRegister} className="flex flex-col gap-3.5">
+                        <TextInput label="Name" value={label} onChange={setLabel} placeholder="Label" required />
+                        <TextInput
+                          label="Token"
+                          value={token}
+                          onChange={setToken}
+                          placeholder="Bot token"
+                          required
+                        />
+                        <Button disabled={isLoading} icon={<Plus size={18} strokeWidth={1.75} />} type="submit">
+                          Add
+                        </Button>
+                      </form>
+                      <Status kind={notice.kind} text={notice.text} />
+                    </PanelBody>
+                  </Panel>
+
+                  <Panel className="flex min-h-0 flex-1 flex-col">
+                    <PanelHeading title="List" />
+                    <PanelBody className="flex min-h-0 flex-1 flex-col gap-3">
+                      <div ref={botsListViewportRef} className="min-h-0 flex-1 overflow-auto">
+                        <BotList
+                          bots={paginatedBots}
+                          isLoading={isLoading}
+                          onDelete={handleDelete}
+                          measureRow={sortedBots.length === 0}
+                        />
+                      </div>
+                      {sortedBots.length > botsPageSize ? (
+                        <PaginationBar
+                          page={Math.min(botsPage, botsTotalPages)}
+                          totalPages={botsTotalPages}
+                          total={sortedBots.length}
+                          disabled={isLoading || isRefreshingBots}
+                          onPrevious={() => setBotsPage((current) => Math.max(1, current - 1))}
+                          onNext={() => setBotsPage((current) => Math.min(botsTotalPages, current + 1))}
+                        />
+                      ) : null}
+                    </PanelBody>
+                  </Panel>
+                </div>
+              </motion.div>
             ) : section === "audit" ? (
               <AuditSection active />
             ) : (
               <SettingsSection active />
             )}
-          </div>
+          </motion.div>
         </motion.div>
       )}
     </AnimatePresence>
   );
 }
 
-function PaginationBar({
-  page,
-  totalPages,
-  total,
-  disabled,
-  onPrevious,
-  onNext,
-}: {
-  page: number;
-  totalPages: number;
-  total: number;
-  disabled?: boolean;
-  onPrevious: () => void;
-  onNext: () => void;
-}) {
-  const canGoBack = page > 1 && !disabled;
-  const canGoForward = page < totalPages && !disabled;
-
-  return (
-    <nav className="list-pagination" aria-label="Pagination">
-      <div className="pagination-shell">
-        <IconButton label="Previous page" variant="toolbar" disabled={!canGoBack} onClick={onPrevious}>
-          <ChevronLeft size={16} strokeWidth={2.25} aria-hidden />
-        </IconButton>
-        <div className="pagination-center" aria-live="polite">
-          <p className="pagination-page">
-            <span className="pagination-page-current">{page}</span>
-            <span className="pagination-page-sep">/</span>
-            <span className="pagination-page-total">{totalPages}</span>
-          </p>
-          <p className="pagination-meta">{total} entries</p>
-        </div>
-        <IconButton label="Next page" variant="toolbar" disabled={!canGoForward} onClick={onNext}>
-          <ChevronRight size={16} strokeWidth={2.25} aria-hidden />
-        </IconButton>
-      </div>
-    </nav>
-  );
-}
-
-function Button({
-  children,
-  disabled,
-  icon,
-  onClick,
-  size = "md",
-  type = "submit",
-  variant = "primary",
-}: {
-  children: ReactNode;
-  disabled?: boolean;
-  icon?: ReactNode;
-  onClick?: () => void;
-  size?: "md" | "sm";
-  type?: "button" | "submit";
-  variant?: "primary" | "secondary" | "danger" | "ghost";
-}) {
-  return (
-    <button
-      className={`button ${variant} button--${size}`}
-      disabled={disabled}
-      onClick={onClick}
-      type={type}
-    >
-      {icon ? <span className="button-lead-icon">{icon}</span> : null}
-      <span className="button-label">{children}</span>
-    </button>
-  );
-}
-
-function IconButton({
-  busy = false,
-  children,
-  className = "",
-  disabled,
-  label,
-  onClick,
-  variant = "default",
-}: {
-  busy?: boolean;
-  children: ReactNode;
-  className?: string;
-  disabled?: boolean;
-  label: string;
-  onClick: () => void;
-  variant?: "default" | "toolbar";
-}) {
-  const variantClass = variant === "toolbar" ? "icon-btn icon-btn--toolbar" : "icon-btn";
-  const isDisabled = disabled || busy;
-  return (
-    <button
-      type="button"
-      className={`${variantClass} ${className}`.trim()}
-      disabled={isDisabled}
-      onClick={onClick}
-      aria-busy={busy}
-      aria-label={label}
-      title={label}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Panel({
-  action,
-  children,
-  className = "",
-  description,
-  title,
-}: {
-  action?: ReactNode;
-  children: ReactNode;
-  className?: string;
-  description?: string;
-  title?: string;
-}) {
-  return (
-    <section className={`panel material ${className}`}>
-      {title ? (
-        <div className="section-heading">
-          <div>
-            <h2>{title}</h2>
-            {description ? <p>{description}</p> : null}
-          </div>
-          {action}
-        </div>
-      ) : null}
-      <div className="panel-body">{children}</div>
-    </section>
-  );
-}
-
-function StatTile({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return (
-    <div className="metrics-cell">
-      <div className="icon-slot icon-slot--compact" aria-hidden>
-        {icon}
-      </div>
-      <div className="stat-tile-body">
-        <span className="stat-tile-label">{label}</span>
-        <strong className="stat-tile-value">{value}</strong>
-      </div>
-    </div>
-  );
-}
-
 const ENDPOINT_SAMPLE = "/bot<TOKEN>/<METHOD>";
 
-function EndpointTile() {
-  function handleCopy() {
-    void navigator.clipboard.writeText(ENDPOINT_SAMPLE);
-  }
-
+function EndpointMetricCard() {
   return (
-    <button type="button" className="metrics-cell metrics-cell--interactive" onClick={handleCopy} aria-label="Copy path">
-      <div className="endpoint-tile-main">
-        <span className="stat-tile-label">Path</span>
-        <code className="endpoint-code">{ENDPOINT_SAMPLE}</code>
-      </div>
-      <span className="endpoint-copy-btn" aria-hidden>
+    <MetricCard
+      label="Path"
+      onClick={() => void navigator.clipboard.writeText(ENDPOINT_SAMPLE)}
+      className="relative pr-12"
+    >
+      <code className="mt-1 block truncate font-mono text-xs text-zinc-700 dark:text-zinc-300">
+        {ENDPOINT_SAMPLE}
+      </code>
+      <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-zinc-500" aria-hidden>
         <Copy size={15} strokeWidth={2} />
       </span>
-    </button>
-  );
-}
-
-function TextInput({
-  autoComplete,
-  icon,
-  label,
-  onChange,
-  placeholder,
-  required,
-  type = "text",
-  value,
-}: {
-  autoComplete?: string;
-  icon?: ReactNode;
-  label: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  required?: boolean;
-  type?: string;
-  value: string;
-}) {
-  return (
-    <label className="field">
-      <span className="field-label">{label}</span>
-      <div className="input-shell">
-        {icon ? <span className="input-lead-icon">{icon}</span> : null}
-        <input
-          autoComplete={autoComplete}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={placeholder}
-          required={required}
-          type={type}
-          value={value}
-        />
-      </div>
-    </label>
-  );
-}
-
-function Status({ notice }: { notice: Notice }) {
-  if (!notice.text) {
-    return <p className="status" aria-live="polite" />;
-  }
-
-  return (
-    <p className={`status ${notice.kind}`} aria-live="polite">
-      {notice.text}
-    </p>
+    </MetricCard>
   );
 }
 
@@ -575,46 +390,41 @@ function BotList({
   onDelete: (tokenHash: string) => Promise<void>;
 }) {
   if (bots.length === 0 && !measureRow) {
-    return (
-      <div className="empty-state material-inset">
-        <p className="empty-title">None</p>
-      </div>
-    );
+    return <EmptyState title="None" />;
   }
 
   return (
-    <ul className="grouped-list grouped-list--inset" aria-label="Bots">
+    <ul className={cn(glassInset, "divide-y divide-black/6 dark:divide-white/8")} aria-label="Bots">
       {measureRow ? (
-        <li className="grouped-row grouped-row--probe" aria-hidden>
-          <div className="row-main">
-            <p className="row-title">Probe</p>
-            <p className="row-meta">
+        <li data-list-row className="flex items-center justify-between gap-3 px-4 py-3" aria-hidden>
+          <div className="min-w-0 flex-1">
+            <p className="m-0 font-medium text-zinc-900 dark:text-zinc-50">Probe</p>
+            <p className="mt-1 mb-0 truncate font-mono text-xs text-zinc-500">
               <code>0000000000000000000000000000000000000000000000000000000000000000</code>
             </p>
-            <p className="row-date">—</p>
+            <p className="mt-1 mb-0 text-xs text-zinc-500">—</p>
           </div>
         </li>
       ) : null}
       {bots.map((bot) => (
-        <li key={bot.token_hash} className="grouped-row">
-          <div className="row-main">
-            <p className="row-title">{bot.label}</p>
-            <p className="row-meta">
+        <li key={bot.token_hash} data-list-row className="flex items-center justify-between gap-3 px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="m-0 font-medium text-zinc-900 dark:text-zinc-50">{bot.label}</p>
+            <p className="mt-1 mb-0 truncate font-mono text-xs text-zinc-500">
               <code>{bot.token_hash}</code>
             </p>
-            <p className="row-date">{new Date(bot.created_at * 1000).toLocaleString()}</p>
+            <p className="mt-1 mb-0 text-xs text-zinc-500">
+              {new Date(bot.created_at * 1000).toLocaleString()}
+            </p>
           </div>
-          <div className="row-actions">
-            <IconButton label="Delete" disabled={isLoading} onClick={() => void onDelete(bot.token_hash)}>
-              <Trash2 size={16} strokeWidth={2} />
-            </IconButton>
-          </div>
+          <IconButton label="Delete" disabled={isLoading} onClick={() => void onDelete(bot.token_hash)}>
+            <Trash2 size={16} strokeWidth={2} />
+          </IconButton>
         </li>
       ))}
     </ul>
   );
 }
-
 createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />
