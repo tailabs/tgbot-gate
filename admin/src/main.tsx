@@ -222,14 +222,17 @@ function App() {
       ) : (
         <motion.div
           key="app"
-          className="flex min-h-dvh flex-col md:flex-row"
+          className="flex h-dvh max-h-dvh flex-col overflow-hidden md:flex-row"
           initial={reduceMotion ? false : { opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           exit={reduceMotion ? undefined : { opacity: 0, y: 8 }}
           transition={pageTransition}
         >
           <aside
-            className={cn(glass, "flex shrink-0 flex-col gap-4 p-4 md:w-56 md:rounded-none md:rounded-r-2xl")}
+            className={cn(
+              glass,
+              "flex shrink-0 flex-col gap-4 p-4 md:h-dvh md:w-56 md:overflow-y-auto md:rounded-none md:rounded-r-2xl",
+            )}
             aria-label="Application"
           >
             <div className="flex items-center gap-2.5 px-1">
@@ -263,9 +266,9 @@ function App() {
             </nav>
           </aside>
 
-          <motion.div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 md:p-6">
+          <motion.div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
             {section === "bots" ? (
-              <motion.div className="flex min-h-0 flex-1 flex-col gap-3.5">
+              <motion.div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-hidden">
                 <PageHeader
                   title="Bots"
                   action={
@@ -348,9 +351,11 @@ function App() {
                 </div>
               </motion.div>
             ) : section === "audit" ? (
-              <AuditSection active />
+              <AuditSection active className="flex min-h-0 flex-1 flex-col overflow-hidden" />
             ) : (
-              <SettingsSection active />
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <SettingsSection active />
+              </div>
             )}
           </motion.div>
         </motion.div>

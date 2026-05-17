@@ -1,8 +1,10 @@
-import { RefObject, useEffect, useState } from "react";
+import { RefObject, useEffect, useRef, useState } from "react";
 
 const DEFAULT_ROW_HEIGHT = 72;
 const DEFAULT_MIN = 3;
 const DEFAULT_MAX = 40;
+/** Ignore sub-pixel / scrollbar jitter when comparing viewport height. */
+const VIEWPORT_HEIGHT_EPSILON = 4;
 
 type Options = {
   min?: number;
@@ -27,6 +29,7 @@ export function useListPageSize(
   const fallbackRowHeight = options.fallbackRowHeight ?? DEFAULT_ROW_HEIGHT;
   const [pageSize, setPageSize] = useState(6);
   const [ready, setReady] = useState(false);
+  const lastViewportHeightRef = useRef<number | null>(null);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -42,18 +45,26 @@ export function useListPageSize(
       }
 
       const sample = viewport.querySelector(rowSelector) as HTMLElement | null;
-      const rowHeight = sample?.getBoundingClientRect().height ?? fallbackRowHeight;
+      const measuredHeight = sample?.getBoundingClientRect().height ?? 0;
+      // `0 ?? fallback` stays 0 in JS; a zero-height probe would inflate page size to max.
+      const rowHeight =
+        Number.isFinite(measuredHeight) && measuredHeight > 1 ? measuredHeight : fallbackRowHeight;
       const next = Math.min(max, Math.max(min, Math.floor(available / rowHeight)));
-      setPageSize((current) => (current === next ? current : next));
+
+      // Ignore content-only resizes (e.g. expanding a row); only reflow on real viewport height changes.
+      const prevHeight = lastViewportHeightRef.current;
+      const viewportHeightChanged =
+        prevHeight === null || Math.abs(prevHeight - available) >= VIEWPORT_HEIGHT_EPSILON;
+      if (viewportHeightChanged) {
+        lastViewportHeightRef.current = available;
+        setPageSize((current) => (current === next ? current : next));
+      }
+
       setReady(true);
     };
 
     const observer = new ResizeObserver(measure);
     observer.observe(viewport);
-    const parent = viewport.parentElement;
-    if (parent) {
-      observer.observe(parent);
-    }
     measure();
 
     return () => observer.disconnect();

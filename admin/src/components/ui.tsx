@@ -15,9 +15,17 @@ export const glassInset = cn(
   "border border-black/6 bg-black/4 dark:border-white/8 dark:bg-white/6",
 );
 
-export function PageHeader({ action, title }: { action?: ReactNode; title: string }) {
+export function PageHeader({
+  action,
+  className,
+  title,
+}: {
+  action?: ReactNode;
+  className?: string;
+  title: string;
+}) {
   return (
-    <header className="flex items-center justify-between gap-3">
+    <header className={cn("flex items-center justify-between gap-3", className)}>
       <h1 className="m-0 text-[28px] font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
         {title}
       </h1>
@@ -38,15 +46,22 @@ export function Panel({
 
 export function PanelHeading({
   children,
+  className,
   description,
   title,
 }: {
   children?: ReactNode;
+  className?: string;
   description?: string;
   title: string;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-black/6 px-[18px] py-3.5 dark:border-white/8">
+    <div
+      className={cn(
+        "flex items-start justify-between gap-3 border-b border-black/6 px-[18px] py-3.5 dark:border-white/8",
+        className,
+      )}
+    >
       <div>
         <h2 className="m-0 text-[13px] font-semibold tracking-[0.08em] text-zinc-500 uppercase dark:text-zinc-400">
           {title}
