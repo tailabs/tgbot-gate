@@ -77,6 +77,19 @@ export function PanelBody({ children, className }: { children: ReactNode; classN
   return <div className={cn("px-[18px] py-4", className)}>{children}</div>;
 }
 
+export function PanelFooter({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 border-t border-black/6 px-[18px] py-3.5 dark:border-white/8 sm:flex-row sm:items-center sm:justify-between",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function Button({
   children,
   className,
