@@ -1,4 +1,13 @@
-import React, { FormEvent, KeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  KeyboardEvent,
+  ReactNode,
+  type SubmitEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
@@ -143,7 +152,7 @@ function App() {
   }, [isSignedIn, loadBots]);
 
 
-  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+  async function handleLogin(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsLoading(true);
     setNotice({ kind: "idle", text: "" });
@@ -163,7 +172,7 @@ function App() {
     }
   }
 
-  async function handleRegister(event: FormEvent<HTMLFormElement>) {
+  async function handleRegister(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsLoading(true);
     setNotice({ kind: "idle", text: "" });

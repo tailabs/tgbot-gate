@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { type SubmitEvent, useCallback, useEffect, useState } from "react";
 import { Loader2, Save } from "lucide-react";
 
 const MIN_BODY_MB = 1;
@@ -82,7 +82,7 @@ export function SettingsSection({ active }: SettingsSectionProps) {
     });
   }, [active, loadSettings]);
 
-  async function handleSaveSettings(event: FormEvent<HTMLFormElement>) {
+  async function handleSaveSettings(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!form) {
       return;
@@ -113,7 +113,7 @@ export function SettingsSection({ active }: SettingsSectionProps) {
     }
   }
 
-  async function handleChangePassword(event: FormEvent<HTMLFormElement>) {
+  async function handleChangePassword(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsLoading(true);
     setNotice({ kind: "idle", text: "" });
