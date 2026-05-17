@@ -259,8 +259,6 @@ fn ensure_shard(conn: &Connection, kind: AuditKind, ym: i32) -> Result<String, r
     Ok(name)
 }
 
-const MAX_SCAN_ROWS: usize = 10_000;
-
 fn list_page(
     conn: &Connection,
     page: u32,
@@ -271,12 +269,26 @@ fn list_page(
 ) -> Result<AuditPage, rusqlite::Error> {
     let page = page.max(1);
     let page_size = page_size.clamp(1, 100);
-    let mut items = list_shards(conn, MAX_SCAN_ROWS, kind_filter, min_status, search)?;
-    items.sort_by(|left, right| right.ts_ms.cmp(&left.ts_ms));
-    let total = items.len() as u64;
-    let total_pages = ((total + u64::from(page_size) - 1) / u64::from(page_size)).max(1) as u32;
-    let offset = ((page - 1) as usize) * page_size as usize;
-    let entries = items.into_iter().skip(offset).take(page_size as usize).collect();
+    let shards = matching_shards(conn, kind_filter)?;
+    let pattern = search.map(|query| format!("%{query}%"));
+    let filter = ListFilter {
+        min_status,
+        pattern: pattern.as_deref(),
+    };
+
+    let total = count_matching(conn, &shards, &filter)?;
+    let total_pages = if total == 0 {
+        1
+    } else {
+        ((total + u64::from(page_size) - 1) / u64::from(page_size)) as u32
+    };
+    let offset = u64::from(page.saturating_sub(1)) * u64::from(page_size);
+    let entries = if total == 0 {
+        Vec::new()
+    } else {
+        fetch_page(conn, &shards, &filter, page_size, offset)?
+    };
+
     Ok(AuditPage {
         entries,
         total,
@@ -286,14 +298,16 @@ fn list_page(
     })
 }
 
-fn list_shards(
-    conn: &Connection,
-    limit: usize,
-    kind_filter: Option<&str>,
+struct ListFilter<'a> {
     min_status: Option<u16>,
-    search: Option<&str>,
-) -> Result<Vec<AuditListItem>, rusqlite::Error> {
-    let mut shards: Vec<(String, String)> = Vec::new();
+    pattern: Option<&'a str>,
+}
+
+fn matching_shards(
+    conn: &Connection,
+    kind_filter: Option<&str>,
+) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    let mut shards = Vec::new();
     let mut stmt = conn.prepare(
         "SELECT shard_name, kind FROM audit_meta ORDER BY ym DESC, shard_name DESC",
     )?;
@@ -302,6 +316,9 @@ fn list_shards(
     })?;
     for row in rows {
         let (shard, kind) = row?;
+        if !is_valid_shard_name(&shard) {
+            continue;
+        }
         if let Some(filter) = kind_filter {
             if kind != filter {
                 continue;
@@ -309,28 +326,29 @@ fn list_shards(
         }
         shards.push((shard, kind));
     }
-
-    let pattern = search.map(|query| format!("%{query}%"));
-    let mut out = Vec::new();
-    for (shard, kind) in shards {
-        if out.len() >= limit {
-            break;
-        }
-        let remaining = limit - out.len();
-        let batch = fetch_shard_rows(
-            conn,
-            &shard,
-            &kind,
-            remaining,
-            min_status,
-            pattern.as_deref(),
-        )?;
-        out.extend(batch);
-    }
-    Ok(out)
+    Ok(shards)
 }
 
-fn search_clause(start_index: usize) -> String {
+fn where_clause(min_status: Option<u16>, pattern: Option<&str>, start_index: usize) -> (String, usize) {
+    let mut parts = Vec::new();
+    let mut index = start_index;
+    if min_status.is_some() {
+        parts.push(format!("status >= ?{index}"));
+        index += 1;
+    }
+    if pattern.is_some() {
+        parts.push(format!("({})", search_predicate(index)));
+        index += 5;
+    }
+    let clause = if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", parts.join(" AND "))
+    };
+    (clause, index)
+}
+
+fn search_predicate(start_index: usize) -> String {
     let fields = [
         "path",
         "method",
@@ -338,73 +356,99 @@ fn search_clause(start_index: usize) -> String {
         "COALESCE(request_body,'')",
         "COALESCE(response_body,'')",
     ];
-    let predicates = fields
+    fields
         .iter()
         .enumerate()
         .map(|(offset, field)| format!("{field} LIKE ?{}", start_index + offset))
         .collect::<Vec<_>>()
-        .join(" OR ");
-    format!(" AND ({predicates})")
+        .join(" OR ")
 }
 
-fn fetch_shard_rows(
-    conn: &Connection,
-    shard: &str,
-    kind: &str,
-    remaining: usize,
+fn append_filter_params<'a>(
     min_status: Option<u16>,
-    pattern: Option<&str>,
+    pattern: Option<&'a str>,
+    out: &mut Vec<rusqlite::types::Value>,
+) {
+    if let Some(min) = min_status {
+        out.push(rusqlite::types::Value::from(min));
+    }
+    if let Some(pat) = pattern {
+        for _ in 0..5 {
+            out.push(rusqlite::types::Value::from(pat.to_string()));
+        }
+    }
+}
+
+fn count_matching(
+    conn: &Connection,
+    shards: &[(String, String)],
+    filter: &ListFilter<'_>,
+) -> Result<u64, rusqlite::Error> {
+    let mut total = 0u64;
+    for (shard, _) in shards {
+        let (where_sql, _) = where_clause(filter.min_status, filter.pattern, 1);
+        let sql = format!("SELECT COUNT(*) FROM {shard}{where_sql}");
+        let mut values = Vec::new();
+        append_filter_params(filter.min_status, filter.pattern, &mut values);
+        let count: i64 = conn.query_row(&sql, rusqlite::params_from_iter(values), |row| row.get(0))?;
+        total += count.max(0) as u64;
+    }
+    Ok(total)
+}
+
+fn fetch_page(
+    conn: &Connection,
+    shards: &[(String, String)],
+    filter: &ListFilter<'_>,
+    page_size: u32,
+    offset: u64,
 ) -> Result<Vec<AuditListItem>, rusqlite::Error> {
-    let sql = match (min_status, pattern.is_some()) {
-        (Some(_), true) => {
-            let search = search_clause(2);
+    if shards.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (where_sql, next_index) = where_clause(filter.min_status, filter.pattern, 1);
+    let limit_index = next_index;
+    let offset_index = next_index + 1;
+
+    let branches: Vec<String> = shards
+        .iter()
+        .map(|(shard, kind)| {
+            let shard_lit = sql_string_literal(shard);
+            let kind_lit = sql_string_literal(kind);
             format!(
-                "SELECT id, ts_ms, method, path, status, latency_ms, client_ip
-                 FROM {shard} WHERE status >= ?1{search} ORDER BY ts_ms DESC LIMIT ?7"
+                "SELECT {shard_lit} AS shard, {kind_lit} AS kind, id, ts_ms, method, path, status, latency_ms, client_ip
+                 FROM {shard}{where_sql}"
             )
-        }
-        (Some(_), false) => format!(
-            "SELECT id, ts_ms, method, path, status, latency_ms, client_ip
-             FROM {shard} WHERE status >= ?1 ORDER BY ts_ms DESC LIMIT ?2"
-        ),
-        (None, true) => {
-            let search = search_clause(1);
-            format!(
-                "SELECT id, ts_ms, method, path, status, latency_ms, client_ip
-                 FROM {shard} WHERE 1 = 1{search} ORDER BY ts_ms DESC LIMIT ?6"
-            )
-        }
-        (None, false) => format!(
-            "SELECT id, ts_ms, method, path, status, latency_ms, client_ip
-             FROM {shard} ORDER BY ts_ms DESC LIMIT ?1"
-        ),
-    };
+        })
+        .collect();
+
+    let sql = format!(
+        "SELECT shard, kind, id, ts_ms, method, path, status, latency_ms, client_ip
+         FROM ({}) ORDER BY ts_ms DESC, shard DESC, id DESC
+         LIMIT ?{limit_index} OFFSET ?{offset_index}",
+        branches.join(" UNION ALL ")
+    );
+
+    let mut values = Vec::new();
+    append_filter_params(filter.min_status, filter.pattern, &mut values);
+    values.push(rusqlite::types::Value::from(page_size as i64));
+    values.push(rusqlite::types::Value::from(offset as i64));
 
     let mut stmt = conn.prepare(&sql)?;
-    let map_row = |row: &rusqlite::Row<'_>| {
+    let rows = stmt.query_map(rusqlite::params_from_iter(values), |row| {
         Ok(AuditListItem {
-            shard: shard.to_string(),
-            id: row.get(0)?,
-            ts_ms: row.get(1)?,
-            method: row.get(2)?,
-            path: row.get(3)?,
-            kind: kind.to_string(),
-            status: row.get::<_, i64>(4)? as u16,
-            latency_ms: row.get(5)?,
-            client_ip: row.get(6)?,
+            shard: row.get(0)?,
+            kind: row.get(1)?,
+            id: row.get(2)?,
+            ts_ms: row.get(3)?,
+            method: row.get(4)?,
+            path: row.get(5)?,
+            status: row.get::<_, i64>(6)? as u16,
+            latency_ms: row.get(7)?,
+            client_ip: row.get(8)?,
         })
-    };
-
-    let limit = remaining as i64;
-    let rows = match (min_status, pattern) {
-        (Some(min), Some(pat)) => {
-            stmt.query_map(params![min, pat, pat, pat, pat, pat, limit], map_row)?
-        }
-        (Some(min), None) => stmt.query_map(params![min, limit], map_row)?,
-        (None, Some(pat)) => stmt.query_map(params![pat, pat, pat, pat, pat, limit], map_row)?,
-        (None, None) => stmt.query_map(params![limit], map_row)?,
-    };
-
+    })?;
     rows.collect()
 }
 
@@ -453,6 +497,10 @@ fn get_row(conn: &Connection, shard: &str, id: i64) -> Result<Option<AuditDetail
 
 fn is_valid_shard_name(shard: &str) -> bool {
     shard.starts_with("audit_proxy_") || shard.starts_with("audit_api_")
+}
+
+fn sql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn cleanup_old_shards(conn: &Connection, retention_days: u32) -> Result<(), rusqlite::Error> {
@@ -518,6 +566,17 @@ mod tests {
         assert_eq!(shard_name(AuditKind::Proxy, 202505), "audit_proxy_202505");
     }
 
+    fn wait_for_records(store: &std::sync::Arc<AuditStore>, expected: u64) {
+        for _ in 0..50 {
+            if store.list(1, 1, None, None, None).map(|page| page.total).unwrap_or(0) >= expected
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("timed out waiting for {expected} audit record(s)");
+    }
+
     #[test]
     fn list_page_search_binds_parameters() {
         let dir = tempfile::tempdir().unwrap();
@@ -535,13 +594,49 @@ mod tests {
             response_body: Some(r#"{"ok":true}"#.to_string()),
         };
         AuditStore::record(&store, entry);
-
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        wait_for_records(&store, 1);
 
         let page = store
             .list(1, 10, None, None, Some("告警测试"))
             .expect("search should not fail binding SQL parameters");
         assert_eq!(page.total, 1);
         assert_eq!(page.entries.len(), 1);
+    }
+
+    #[test]
+    fn list_page_uses_sql_pagination() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("audit.db");
+        let store = std::sync::Arc::new(AuditStore::open(db_path, 7).unwrap());
+
+        for (index, ts_ms) in [3_000_i64, 2_000, 1_000].into_iter().enumerate() {
+            AuditStore::record(
+                &store,
+                CaptureEntry {
+                    kind: AuditKind::Proxy,
+                    ts_ms,
+                    method: "POST".to_string(),
+                    path: format!("/bot***/sendMessage/{index}"),
+                    status: 200,
+                    latency_ms: 1,
+                    client_ip: "127.0.0.1".to_string(),
+                    request_body: None,
+                    response_body: None,
+                },
+            );
+        }
+        wait_for_records(&store, 3);
+
+        let page1 = store.list(1, 2, None, None, None).expect("page 1");
+        assert_eq!(page1.total, 3);
+        assert_eq!(page1.total_pages, 2);
+        assert_eq!(page1.entries.len(), 2);
+        assert_eq!(page1.entries[0].ts_ms, 3_000);
+        assert_eq!(page1.entries[1].ts_ms, 2_000);
+
+        let page2 = store.list(2, 2, None, None, None).expect("page 2");
+        assert_eq!(page2.total, 3);
+        assert_eq!(page2.entries.len(), 1);
+        assert_eq!(page2.entries[0].ts_ms, 1_000);
     }
 }
