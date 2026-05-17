@@ -101,6 +101,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin", get(admin_page))
         .route("/healthz", get(healthz))
         .route("/api/login", post(login))
+        .route("/api/session", get(session_check))
         .route("/api/bots", get(list_bots).post(register_bot))
         .route("/api/bots/{token_hash}", delete(delete_bot))
         .route("/api/settings", get(get_settings).put(update_settings))
@@ -314,6 +315,14 @@ fn with_security_headers(mut response: Response) -> Response {
         HeaderValue::from_static("DENY"),
     );
     response
+}
+
+async fn session_check(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
+    if is_authorized(&state, &headers) {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
 }
 
 async fn login(
@@ -636,6 +645,25 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(response.headers().get(header::SET_COOKIE).is_some());
+    }
+
+    #[tokio::test]
+    async fn session_check_accepts_valid_cookie() {
+        let state = test_state();
+        let token = state.auth.read().unwrap().session_token().to_string();
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/session")
+                    .header(header::COOKIE, format!("{SESSION_COOKIE}={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]

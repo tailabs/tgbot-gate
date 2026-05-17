@@ -19,7 +19,7 @@ import "./index.css";
 import { useListPageSize } from "./useListPageSize";
 import { AuditSection } from "./AuditSection";
 import { SettingsSection } from "./SettingsSection";
-import { api, withMinRefreshDuration } from "./lib/api";
+import { api, ApiError, withMinRefreshDuration } from "./lib/api";
 import {
   Button,
   EmptyState,
@@ -55,9 +55,12 @@ type Notice = {
 
 type AppSection = "bots" | "audit" | "settings";
 
+type AuthState = "checking" | "signed-out" | "signed-in";
+
 function App() {
   const reduceMotion = useReducedMotion();
-  const [isSignedIn, setIsSignedIn] = useState(false);
+  const [authState, setAuthState] = useState<AuthState>("checking");
+  const isSignedIn = authState === "signed-in";
   const [password, setPassword] = useState("");
   const [label, setLabel] = useState("");
   const [token, setToken] = useState("");
@@ -100,20 +103,43 @@ function App() {
         const data = await api<BotsResponse>("/api/bots");
         setBots(data.bots);
       });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setAuthState("signed-out");
+        return;
+      }
+      setNotice({ kind: "error", text: "Refresh failed." });
     } finally {
       setIsRefreshingBots(false);
     }
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    void api<void>("/api/session")
+      .then(() => {
+        if (!cancelled) {
+          setAuthState("signed-in");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAuthState("signed-out");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isSignedIn) {
       return;
     }
 
-    void loadBots().catch(() => {
-      setNotice({ kind: "error", text: "Refresh failed." });
-    });
+    void loadBots();
   }, [isSignedIn, loadBots]);
 
 
@@ -128,7 +154,7 @@ function App() {
         body: JSON.stringify({ password }),
       });
       setPassword("");
-      setIsSignedIn(true);
+      setAuthState("signed-in");
       setNotice({ kind: "idle", text: "" });
     } catch {
       setNotice({ kind: "error", text: "Wrong password." });
@@ -180,9 +206,17 @@ function App() {
 
   const pageTransition = reduceMotion ? { duration: 0 } : { duration: 0.4, ease: [0.25, 0.1, 0.25, 1] as const };
 
+  if (authState === "checking") {
+    return (
+      <motion.div className="flex min-h-dvh items-center justify-center p-6" aria-busy aria-label="Checking session">
+        <Loader2 size={28} className="animate-spin text-zinc-500" aria-hidden />
+      </motion.div>
+    );
+  }
+
   return (
     <AnimatePresence mode="wait">
-      {!isSignedIn ? (
+      {authState === "signed-out" ? (
         <motion.div
           key="login"
           className="flex min-h-dvh items-center justify-center p-6"
