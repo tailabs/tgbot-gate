@@ -1,5 +1,5 @@
-use std::sync::Arc;
-use std::{env, path::PathBuf};
+use std::sync::{Arc, RwLock};
+use std::path::PathBuf;
 
 use axum::{
     body::{to_bytes, Body},
@@ -7,7 +7,7 @@ use axum::{
     middleware,
     http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use bytes::Bytes;
@@ -17,43 +17,37 @@ use tokio::fs;
 use tower_http::services::ServeDir;
 
 use crate::{
-    audit::{self, AuditRuntime},
+    audit,
     auth::AdminAuth,
     registry::{BotRecord, BotRegistry},
+    settings::{GateSettingsPatch, RuntimeSettings},
 };
 
 const SESSION_COOKIE: &str = "gate_session";
-const DEFAULT_MAX_PROXY_BODY_BYTES: usize = 50 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct AppState {
     registry: BotRegistry,
-    auth: AdminAuth,
+    auth: Arc<RwLock<AdminAuth>>,
     proxy: TelegramProxy,
     admin_dist_dir: PathBuf,
-    max_proxy_body_bytes: usize,
-    pub audit: AuditRuntime,
+    pub settings: Arc<RuntimeSettings>,
 }
 
 impl AppState {
     pub fn new(
         registry: BotRegistry,
-        auth: AdminAuth,
+        auth: Arc<RwLock<AdminAuth>>,
         proxy: TelegramProxy,
-        audit: AuditRuntime,
+        settings: Arc<RuntimeSettings>,
+        admin_dist_dir: PathBuf,
     ) -> Self {
         Self {
             registry,
             auth,
             proxy,
-            admin_dist_dir: env::var("ADMIN_DIST_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("admin/dist")),
-            max_proxy_body_bytes: env::var("MAX_PROXY_BODY_BYTES")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(DEFAULT_MAX_PROXY_BODY_BYTES),
-            audit,
+            admin_dist_dir,
+            settings,
         }
     }
 }
@@ -109,13 +103,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/login", post(login))
         .route("/api/bots", get(list_bots).post(register_bot))
         .route("/api/bots/{token_hash}", delete(delete_bot))
+        .route("/api/settings", get(get_settings).put(update_settings))
+        .route("/api/settings/password", put(change_password))
         .route("/api/audit/status", get(audit_status))
         .route("/api/audit", get(list_audit))
         .route("/api/audit/{shard}/{id}", get(get_audit))
         .nest_service("/assets", ServeDir::new(assets_dir))
         .fallback(proxy_or_not_found)
         .layer(middleware::from_fn_with_state(
-            state.audit.clone(),
+            state.settings.clone(),
             audit::middleware,
         ))
         .with_state(state)
@@ -138,13 +134,87 @@ struct AuditStatusResponse {
     enabled: bool,
 }
 
+async fn get_settings(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
+    if !is_authorized(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    Json(state.settings.public()).into_response()
+}
+
+async fn update_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(patch): Json<GateSettingsPatch>,
+) -> impl IntoResponse {
+    if !is_authorized(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    match state.settings.update(patch) {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+            (StatusCode::BAD_REQUEST, error.to_string()).into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to update settings: {error}"),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+async fn change_password(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<ChangePasswordRequest>,
+) -> impl IntoResponse {
+    if !is_authorized(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    if body.new_password.trim().len() < 8 {
+        return (StatusCode::BAD_REQUEST, "new password must be at least 8 characters").into_response();
+    }
+
+    let mut auth = state.auth.write().expect("auth lock poisoned");
+    if !auth.verify_password(&body.current_password) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let new_auth = AdminAuth::configured(body.new_password);
+    if let Err(error) = state
+        .settings
+        .db_handle()
+        .set_admin_password_hash(new_auth.stored_password_hash())
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to persist password: {error}"),
+        )
+            .into_response();
+    }
+    *auth = new_auth;
+
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    set_session_cookie(&mut response, auth.session_token());
+    response
+}
+
 async fn audit_status(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
     if !is_authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
+    let snapshot = state.settings.audit_snapshot();
     Json(AuditStatusResponse {
-        enabled: state.audit.store.is_some(),
+        enabled: snapshot.store.is_some(),
     })
     .into_response()
 }
@@ -158,10 +228,10 @@ async fn list_audit(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    let Some(store) = state.audit.store.as_ref() else {
+    let Some(store) = state.settings.audit_snapshot().store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            "audit capture is not enabled (set AUDIT_CAPTURE=1)",
+            "audit capture is disabled; enable it in Settings",
         )
             .into_response();
     };
@@ -189,10 +259,10 @@ async fn get_audit(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    let Some(store) = state.audit.store.as_ref() else {
+    let Some(store) = state.settings.audit_snapshot().store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            "audit capture is not enabled (set AUDIT_CAPTURE=1)",
+            "audit capture is disabled; enable it in Settings",
         )
             .into_response();
     };
@@ -250,21 +320,24 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
-    if !state.auth.verify_password(&payload.password) {
+    let auth = state.auth.read().expect("auth lock poisoned");
+    if !auth.verify_password(&payload.password) {
         return (StatusCode::UNAUTHORIZED, "invalid password").into_response();
     }
 
-    let cookie = format!(
-        "{}={}; HttpOnly; SameSite=Strict; Path=/",
-        SESSION_COOKIE,
-        state.auth.session_token()
-    );
     let mut response = StatusCode::NO_CONTENT.into_response();
+    set_session_cookie(&mut response, auth.session_token());
+    response
+}
+
+fn set_session_cookie(response: &mut Response, token: &str) {
+    let cookie = format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/"
+    );
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie).expect("session cookie is valid"),
     );
-    response
 }
 
 async fn list_bots(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
@@ -338,7 +411,7 @@ async fn proxy_or_not_found(State(state): State<Arc<AppState>>, request: Request
         return (StatusCode::FORBIDDEN, "bot token is not registered").into_response();
     }
 
-    let body = match to_bytes(body, state.max_proxy_body_bytes).await {
+    let body = match to_bytes(body, state.settings.max_proxy_body_bytes()).await {
         Ok(body) => body,
         Err(error) => {
             return (
@@ -361,7 +434,13 @@ async fn proxy_or_not_found(State(state): State<Arc<AppState>>, request: Request
 
 fn is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
     extract_session(headers)
-        .map(|session| state.auth.verify_session(session))
+        .map(|session| {
+            state
+                .auth
+                .read()
+                .expect("auth lock poisoned")
+                .verify_session(session)
+        })
         .unwrap_or(false)
 }
 
@@ -464,11 +543,13 @@ mod tests {
     fn test_state() -> Arc<AppState> {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(crate::db::GateDatabase::open(dir.path().join("gate.db")).unwrap());
+        let settings = RuntimeSettings::load(db.clone()).unwrap();
         Arc::new(AppState::new(
             BotRegistry::open(db).unwrap(),
-            AdminAuth::configured("admin-pass".to_string()),
+            Arc::new(RwLock::new(AdminAuth::configured("admin-pass".to_string()))),
             TelegramProxy::with_base_url("http://127.0.0.1:1".to_string()),
-            AuditRuntime::from_env(dir.path(), DEFAULT_MAX_PROXY_BODY_BYTES),
+            settings,
+            PathBuf::from("admin/dist"),
         ))
     }
 
@@ -506,13 +587,14 @@ mod tests {
         )
         .unwrap();
         let db = Arc::new(crate::db::GateDatabase::open(dir.path().join("gate.db")).unwrap());
-        let mut state = AppState::new(
+        let settings = RuntimeSettings::load(db.clone()).unwrap();
+        let state = AppState::new(
             BotRegistry::open(db).unwrap(),
-            AdminAuth::configured("admin-pass".to_string()),
+            Arc::new(RwLock::new(AdminAuth::configured("admin-pass".to_string()))),
             TelegramProxy::with_base_url("http://127.0.0.1:1".to_string()),
-            AuditRuntime::from_env(dir.path(), DEFAULT_MAX_PROXY_BODY_BYTES),
+            settings,
+            dir.path().to_path_buf(),
         );
-        state.admin_dist_dir = dir.path().to_path_buf();
 
         let response = router(Arc::new(state))
             .oneshot(

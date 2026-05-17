@@ -112,11 +112,26 @@ impl GateDatabase {
     }
 
     pub fn set_admin_password_hash(&self, hash: &str) -> io::Result<()> {
+        self.set_setting(SETTINGS_ADMIN_PASSWORD, hash)
+    }
+
+    pub fn get_setting(&self, key: &str) -> io::Result<Option<String>> {
+        let conn = self.conn();
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(io::Error::other)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> io::Result<()> {
         let conn = self.conn();
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![SETTINGS_ADMIN_PASSWORD, hash],
+            params![key, value],
         )
         .map_err(io::Error::other)?;
         Ok(())

@@ -93,23 +93,6 @@ pub struct AuditStore {
     inserts_since_cleanup: AtomicUsize,
 }
 
-pub fn capture_enabled() -> bool {
-    match std::env::var("AUDIT_CAPTURE") {
-        Ok(value) => {
-            let value = value.trim().to_ascii_lowercase();
-            value == "1" || value == "true" || value == "yes" || value == "on"
-        }
-        Err(_) => false,
-    }
-}
-
-pub fn retention_days_from_env() -> u32 {
-    std::env::var("AUDIT_RETENTION_DAYS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(7)
-}
-
 impl AuditStore {
     pub fn open(db_path: PathBuf, retention_days: u32) -> Result<Self, rusqlite::Error> {
         if let Some(parent) = db_path.parent() {

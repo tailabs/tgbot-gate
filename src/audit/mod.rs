@@ -2,7 +2,6 @@ mod store;
 
 use std::{
     io::{self, Write},
-    path::Path,
     sync::Arc,
     time::Instant,
 };
@@ -16,100 +15,27 @@ use axum::{
 };
 use bytes::Bytes;
 
-use crate::db::gate_db_path;
+use crate::settings::{GateSettings, RuntimeSettings};
 use serde::Serialize;
 
-pub use store::{
-    capture_enabled, retention_days_from_env, AuditKind, AuditStore, CaptureEntry,
-};
+pub use store::{AuditKind, AuditStore, CaptureEntry};
 
 const AUDIT_PREFIX: &str = "audit";
 
-#[derive(Debug, Clone)]
-pub struct AuditRuntime {
-    pub store: Option<Arc<AuditStore>>,
-    pub max_body_bytes: usize,
-    pub errors_only: bool,
-    pub retention_days: u32,
-}
-
-impl AuditRuntime {
-    pub fn from_env(data_path: &Path, max_proxy_body_bytes: usize) -> Self {
-        let retention_days = retention_days_from_env();
-        let errors_only = errors_only_from_env();
-        let max_body_bytes = env_usize("AUDIT_MAX_BODY_BYTES").unwrap_or(max_proxy_body_bytes);
-        let store = if capture_enabled() {
-            let db_path = gate_db_path(data_path);
-            match AuditStore::open(db_path, retention_days) {
-                Ok(store) => Some(Arc::new(store)),
-                Err(error) => {
-                    eprintln!("audit capture disabled: failed to open db: {error}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        Self {
-            store,
-            max_body_bytes,
-            errors_only,
-            retention_days,
-        }
-    }
-}
-
-fn errors_only_from_env() -> bool {
-    match std::env::var("AUDIT_ERRORS_ONLY") {
-        Ok(value) => {
-            let value = value.trim().to_ascii_lowercase();
-            value == "1" || value == "true" || value == "yes" || value == "on"
-        }
-        Err(_) => false,
-    }
-}
-
-fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-}
-
-pub fn stdout_enabled() -> bool {
-    cfg_stdout_enabled()
-}
-
-#[cfg(test)]
-fn cfg_stdout_enabled() -> bool {
-    false
-}
-
-#[cfg(not(test))]
-fn cfg_stdout_enabled() -> bool {
-    match std::env::var("AUDIT_LOG") {
-        Ok(value) => {
-            let value = value.trim().to_ascii_lowercase();
-            value != "0" && value != "false" && value != "off" && value != "no"
-        }
-        Err(_) => true,
-    }
-}
-
-pub fn emit_startup_notice(runtime: &AuditRuntime) {
-    if stdout_enabled() {
-        println!("{AUDIT_PREFIX}: stdout JSON logging enabled (AUDIT_LOG=0 to disable)");
+pub fn emit_startup_notice(settings: &GateSettings, capture_active: bool) {
+    if settings.audit_log {
+        println!("{AUDIT_PREFIX}: stdout JSON logging enabled (disable in Settings)");
         let _ = io::stdout().flush();
     }
-    if runtime.store.is_some() {
+    if capture_active {
         println!(
-            "{AUDIT_PREFIX}: SQLite capture enabled (retention {} days, set AUDIT_CAPTURE=0 to disable)",
-            runtime.retention_days
+            "{AUDIT_PREFIX}: SQLite capture enabled (retention {} days)",
+            settings.audit_retention_days
         );
-    } else if capture_enabled() {
-        eprintln!("{AUDIT_PREFIX}: AUDIT_CAPTURE requested but store is unavailable");
+    } else if settings.audit_capture {
+        eprintln!("{AUDIT_PREFIX}: audit capture requested but store is unavailable");
     } else {
-        println!("{AUDIT_PREFIX}: SQLite capture disabled (set AUDIT_CAPTURE=1 to enable)");
+        println!("{AUDIT_PREFIX}: SQLite capture disabled (enable in Settings)");
     }
 }
 
@@ -132,12 +58,17 @@ pub fn is_telegram_proxy_path(path: &str) -> bool {
     path.starts_with("/bot")
 }
 
-pub async fn middleware(State(runtime): State<AuditRuntime>, request: Request, next: Next) -> Response {
+pub async fn middleware(
+    State(settings): State<Arc<RuntimeSettings>>,
+    request: Request,
+    next: Next,
+) -> Response {
     let path_raw = request.uri().path().to_string();
     if !is_telegram_proxy_path(&path_raw) {
         return next.run(request).await;
     }
 
+    let audit = settings.audit_snapshot();
     let method = request.method().as_str().to_owned();
     let path_redacted = redact_path(&path_raw);
     let client_ip = client_ip(request.headers()).to_owned();
@@ -145,11 +76,11 @@ pub async fn middleware(State(runtime): State<AuditRuntime>, request: Request, n
 
     let (request, req_body_log) = {
         let (parts, body) = request.into_parts();
-        let bytes = match to_bytes(body, runtime.max_body_bytes).await {
+        let bytes = match to_bytes(body, audit.max_body_bytes).await {
             Ok(bytes) => bytes,
             Err(_) => Bytes::new(),
         };
-        let text = body_preview(&bytes, runtime.max_body_bytes);
+        let text = body_preview(&bytes, audit.max_body_bytes);
         let text = text.map(|value| redact_body(&value));
         let rebuilt = Request::from_parts(parts, Body::from(bytes));
         (rebuilt, text)
@@ -161,11 +92,11 @@ pub async fn middleware(State(runtime): State<AuditRuntime>, request: Request, n
 
     let (response, resp_body_log) = {
         let (parts, body) = response.into_parts();
-        let bytes = match to_bytes(body, runtime.max_body_bytes).await {
+        let bytes = match to_bytes(body, audit.max_body_bytes).await {
             Ok(bytes) => bytes,
             Err(_) => Bytes::new(),
         };
-        let text = body_preview(&bytes, runtime.max_body_bytes);
+        let text = body_preview(&bytes, audit.max_body_bytes);
         let text = text.map(|value| redact_body(&value));
         let rebuilt = Response::from_parts(parts, Body::from(bytes));
         (rebuilt, text)
@@ -183,7 +114,7 @@ pub async fn middleware(State(runtime): State<AuditRuntime>, request: Request, n
         response_body: resp_body_log.as_deref(),
     };
 
-    if stdout_enabled() {
+    if audit.stdout_log {
         if let Ok(line) = serde_json::to_string(&record) {
             let mut out = io::stdout().lock();
             let _ = writeln!(out, "{AUDIT_PREFIX} {line}");
@@ -192,10 +123,10 @@ pub async fn middleware(State(runtime): State<AuditRuntime>, request: Request, n
     }
 
     let should_capture =
-        runtime.store.is_some() && (!runtime.errors_only || status >= 400);
+        audit.store.is_some() && (!audit.errors_only || status >= 400);
 
     if should_capture {
-        if let Some(store) = &runtime.store {
+        if let Some(store) = &audit.store {
             store.record(CaptureEntry {
                 kind: AuditKind::Proxy,
                 ts_ms: record.ts_ms as i64,

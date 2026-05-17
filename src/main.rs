@@ -3,6 +3,7 @@ mod audit;
 mod auth;
 mod db;
 mod registry;
+mod settings;
 
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -10,6 +11,7 @@ use app::{AppState, TelegramProxy};
 use auth::AdminAuth;
 use db::{gate_db_path, GateDatabase};
 use registry::BotRegistry;
+use settings::RuntimeSettings;
 use tokio::net::TcpListener;
 
 fn load_auth(
@@ -50,16 +52,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => {}
         Err(error) => eprintln!("legacy bots.json migration skipped: {error}"),
     }
-    let auth = load_auth(database.as_ref(), admin_password)?;
-
-    let max_proxy_body_bytes = env::var("MAX_PROXY_BODY_BYTES")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(50 * 1024 * 1024);
-    let audit = audit::AuditRuntime::from_env(database.path(), max_proxy_body_bytes);
+    let auth = Arc::new(std::sync::RwLock::new(load_auth(database.as_ref(), admin_password)?));
+    let settings = RuntimeSettings::load(database.clone())?;
     let registry = BotRegistry::open(database)?;
-    let state = Arc::new(AppState::new(registry, auth, TelegramProxy::default(), audit));
-    audit::emit_startup_notice(&state.audit);
+    let state = Arc::new(AppState::new(
+        registry,
+        auth,
+        TelegramProxy::default(),
+        settings.clone(),
+        env::var("ADMIN_DIST_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("admin/dist")),
+    ));
+    settings.emit_startup_notice();
     let router = app::router(state);
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
     let listener = TcpListener::bind(addr).await?;

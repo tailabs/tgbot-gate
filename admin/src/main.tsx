@@ -15,10 +15,12 @@ import {
   ShieldCheck,
   Trash2,
   ScrollText,
+  Settings,
 } from "lucide-react";
 import "./styles.css";
 import { useListPageSize } from "./useListPageSize";
 import { AuditSection } from "./AuditSection";
+import { SettingsSection } from "./SettingsSection";
 
 type BotRecord = {
   token_hash: string;
@@ -35,7 +37,7 @@ type Notice = {
   text: string;
 };
 
-type AppSection = "bots" | "audit";
+type AppSection = "bots" | "audit" | "settings";
 
 const MIN_REFRESH_MS = 450;
 
@@ -266,6 +268,10 @@ function App() {
                 <ScrollText size={17} strokeWidth={1.75} aria-hidden />
                 Audit
               </button>
+              <button type="button" className={`nav-item ${section === "settings" ? "nav-item-active" : ""}`} aria-current={section === "settings" ? "page" : undefined} onClick={() => setSection("settings")}>
+                <Settings size={17} strokeWidth={1.75} aria-hidden />
+                Settings
+              </button>
             </nav>
           </aside>
 
@@ -320,8 +326,10 @@ function App() {
               </Panel>
             </div>
               </div>
+            ) : section === "audit" ? (
+              <AuditSection active />
             ) : (
-              <AuditSection active={section === "audit"} />
+              <SettingsSection active />
             )}
           </div>
         </motion.div>

@@ -54,20 +54,30 @@ http://localhost:8080/admin
 
 ## Configuration
 
+### Environment variables (runtime only)
+
+These must be set before the process starts:
+
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PORT` | `8080` | HTTP port for the service |
-| `GATE_DB_PATH` | `data/gate.db` | SQLite database (bots, admin password hash, audit shards) |
-| `DATA_PATH` | `data/bots.json` | Legacy path used only to derive default `GATE_DB_PATH` parent directory |
-| `ADMIN_PASSWORD` | generated at startup | Password for the admin console |
+| `PORT` | `8080` | HTTP listen port |
+| `GATE_DB_PATH` | `data/gate.db` | SQLite database path |
+| `DATA_PATH` | `data/bots.json` | Legacy path used only to derive the default `GATE_DB_PATH` parent directory |
 | `ADMIN_DIST_DIR` | `admin/dist` | Built admin UI directory |
-| `AUDIT_LOG` | `1` (on) | JSON audit lines on stdout for Telegram proxy routes only (`/bot...`); set `0` to disable |
-| `AUDIT_CAPTURE` | `0` (off) | Persist Telegram proxy request/response bodies to `gate.db`; set `1` to enable |
-| `AUDIT_RETENTION_DAYS` | `7` | Drop monthly audit shard tables older than this many days |
-| `AUDIT_ERRORS_ONLY` | `0` (off) | When `1`, only capture entries with HTTP status >= 400 |
-| `AUDIT_MAX_BODY_BYTES` | same as `MAX_PROXY_BODY_BYTES` | Max bytes buffered per request/response body for audit |
+| `ADMIN_PASSWORD` | generated once | Optional bootstrap password; stored as a hash in SQLite afterward |
 
-If `ADMIN_PASSWORD` is not set, the service generates one at startup and prints it to the logs. Set a fixed password for production.
+If `ADMIN_PASSWORD` is not set and the database has no admin hash yet, the service generates a password at startup and prints it to the logs.
+
+### Admin Settings (stored in SQLite)
+
+Audit, proxy limits, and the admin password can be changed in the admin UI under **Settings** without restarting the service:
+
+- Stdout JSON audit log (`/bot...` only)
+- SQLite audit capture, retention, errors-only mode, max body size
+- Max proxy request body size
+- Admin password
+
+On first startup, legacy environment variables (`AUDIT_*`, `MAX_PROXY_BODY_BYTES`) are read once, written into the database, and then ignored.
 
 ## Proxy Usage
 
@@ -83,7 +93,7 @@ Unregistered tokens return `403 Forbidden`.
 
 ### Audit list API
 
-When `AUDIT_CAPTURE=1`, `GET /api/audit` supports pagination and search:
+When audit capture is enabled in Settings, `GET /api/audit` supports pagination and search:
 
 | Query | Default | Description |
 | --- | --- | --- |
@@ -105,8 +115,9 @@ Set at least:
 ```text
 ADMIN_PASSWORD=<strong-password>
 GATE_DB_PATH=/app/data/gate.db
-AUDIT_CAPTURE=1
 ```
+
+Enable audit capture from **Settings** in the admin UI after deploy (or set `AUDIT_CAPTURE=1` once before first boot to seed the database).
 
 Railway provides the public domain and HTTPS. The app listens on the `PORT` value provided by the platform.
 

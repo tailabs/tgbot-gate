@@ -109,7 +109,7 @@ export function AuditSection({ active }: AuditSectionProps) {
       if (!status.enabled) {
         setNotice({
           kind: "info",
-          text: "Audit capture is off. Set AUDIT_CAPTURE=1 and restart the server.",
+          text: "Audit capture is off. Enable it in Settings.",
         });
         setEntries([]);
         setTotal(0);
