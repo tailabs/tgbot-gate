@@ -40,11 +40,13 @@ type FetchPageOptions = {
   minDuration?: boolean;
 };
 
+export const AUDIT_PAGE_SIZE = 20;
+
 export function auditEntryKey(item: Pick<AuditListItem, "shard" | "id">): string {
   return `${item.shard}:${item.id}`;
 }
 
-export function useAuditLog(active: boolean, pageSize: number) {
+export function useAuditLog(active: boolean) {
   const [captureEnabled, setCaptureEnabled] = useState<boolean | null>(null);
   const [isListLoading, setIsListLoading] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
@@ -57,9 +59,6 @@ export function useAuditLog(active: boolean, pageSize: number) {
   const [modalDetail, setModalDetail] = useState<AuditDetail | null>(null);
   const [detailCache, setDetailCache] = useState<Record<string, AuditDetail>>({});
   const [notice, setNotice] = useState<Notice>({ kind: "idle", text: "" });
-
-  const pageSizeRef = useRef(pageSize);
-  pageSizeRef.current = pageSize;
 
   const searchRef = useRef(search);
   searchRef.current = search;
@@ -108,7 +107,7 @@ export function useAuditLog(active: boolean, pageSize: number) {
       const run = async () => {
         const params = new URLSearchParams();
         params.set("page", String(targetPage));
-        params.set("page_size", String(Math.max(1, pageSizeRef.current)));
+        params.set("page_size", String(AUDIT_PAGE_SIZE));
         const query = searchRef.current.trim();
         if (query) {
           params.set("q", query);
@@ -164,11 +163,11 @@ export function useAuditLog(active: boolean, pageSize: number) {
   }, [active, loadStatus]);
 
   useEffect(() => {
-    if (!active || captureEnabled !== true || pageSize < 1) {
+    if (!active || captureEnabled !== true) {
       return;
     }
     void fetchPageRef.current(1, { closeModal: false, minDuration: false });
-  }, [active, captureEnabled, pageSize]);
+  }, [active, captureEnabled]);
 
   const openDetail = useCallback(async (item: AuditListItem) => {
     const key = auditEntryKey(item);

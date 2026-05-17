@@ -1,8 +1,7 @@
-import { type KeyboardEvent, useRef } from "react";
+import { type KeyboardEvent } from "react";
 import { Eye, RefreshCw, Search } from "lucide-react";
 import { AuditDetailDialog } from "./components/AuditDetailDialog";
-import { auditEntryKey, useAuditLog, type AuditListItem } from "./hooks/useAuditLog";
-import { useViewportPageSize } from "./hooks/useViewportPageSize";
+import { auditEntryKey, AUDIT_PAGE_SIZE, useAuditLog, type AuditListItem } from "./hooks/useAuditLog";
 import {
   Button,
   EmptyState,
@@ -13,14 +12,12 @@ import {
   PanelBody,
   PanelHeading,
   Status,
+  glassInset,
 } from "./components/ui";
 import { cn } from "./lib/cn";
 
-const ROW_PX = 52;
-
 type AuditSectionProps = {
   active: boolean;
-  className?: string;
 };
 
 function statusTone(status: number): "ok" | "warn" | "error" {
@@ -45,10 +42,7 @@ function formatAuditTime(tsMs: number): string {
   });
 }
 
-export function AuditSection({ active, className }: AuditSectionProps) {
-  const listViewportRef = useRef<HTMLDivElement>(null);
-  const pageSize = useViewportPageSize(listViewportRef, { max: 50, min: 5, rowPx: ROW_PX });
-
+export function AuditSection({ active }: AuditSectionProps) {
   const {
     captureEnabled,
     closeModal,
@@ -67,7 +61,7 @@ export function AuditSection({ active, className }: AuditSectionProps) {
     setSearch,
     total,
     totalPages,
-  } = useAuditLog(active, pageSize);
+  } = useAuditLog(active);
 
   function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
@@ -82,13 +76,13 @@ export function AuditSection({ active, className }: AuditSectionProps) {
 
   return (
     <>
-      <div className={cn("flex min-h-0 flex-1 flex-col gap-3.5", className)}>
-        <PageHeader title="Audit" className="shrink-0" />
+      <div className="flex flex-col gap-3.5">
+        <PageHeader title="Audit" />
 
-        <Panel className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <PanelHeading title="Captured requests" className="shrink-0" />
+        <Panel>
+          <PanelHeading title="Captured requests" />
 
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-black/6 px-[18px] py-3 dark:border-white/8">
+          <div className="flex flex-wrap items-center gap-2 border-b border-black/6 px-[18px] py-3 dark:border-white/8">
             <label className="flex min-h-10 min-w-[200px] flex-1 items-center gap-2 rounded-[10px] border border-black/6 bg-black/4 px-3 dark:border-white/10 dark:bg-white/6">
               <Search size={16} strokeWidth={2} className="shrink-0 text-zinc-500" aria-hidden />
               <span className="sr-only">Search audit log</span>
@@ -109,56 +103,66 @@ export function AuditSection({ active, className }: AuditSectionProps) {
           </div>
 
           {notice.text ? (
-            <div className="shrink-0 px-[18px] pt-3">
+            <div className="px-[18px] pt-3">
               <Status kind={notice.kind} text={notice.text} />
             </div>
           ) : null}
 
-          <PanelBody className="flex min-h-0 flex-1 flex-col !p-0">
-            <div
-              ref={listViewportRef}
-              className={cn(
-                "min-h-0 flex-1 overflow-y-auto px-[18px] py-3",
-                isListLoading && "pointer-events-none opacity-60",
-              )}
-              aria-busy={isListLoading}
-            >
-              {captureEnabled === null ? (
-                <EmptyState title="Loading…" />
-              ) : captureEnabled === false ? (
-                <EmptyState title="Audit capture is off" />
-              ) : entries.length === 0 && !isListLoading ? (
-                <EmptyState title="No audit entries" />
-              ) : (
-                <ul className="m-0 list-none divide-y divide-black/6 p-0 dark:divide-white/8" aria-label="Audit log">
-                  {entries.map((entry) => (
-                    <AuditRow
-                      key={auditEntryKey(entry)}
-                      entry={entry}
-                      onView={() => void openDetail(entry)}
-                    />
-                  ))}
-                </ul>
-              )}
-            </div>
+          <PanelBody className="flex flex-col gap-3">
+            {captureEnabled === null ? (
+              <EmptyState title="Loading…" />
+            ) : captureEnabled === false ? (
+              <EmptyState title="Audit capture is off" />
+            ) : entries.length === 0 && !isListLoading ? (
+              <EmptyState title="No audit entries" />
+            ) : (
+              <div
+                className={cn(glassInset, "overflow-x-auto", isListLoading && "pointer-events-none opacity-60")}
+                aria-busy={isListLoading}
+              >
+                <table className="w-full min-w-[640px] border-collapse text-left text-sm">
+                  <caption className="sr-only">Audit log, {AUDIT_PAGE_SIZE} rows per page</caption>
+                  <thead>
+                    <tr className="border-b border-black/6 text-xs font-semibold tracking-wide text-zinc-500 uppercase dark:border-white/8 dark:text-zinc-400">
+                      <th className="px-3 py-2.5 font-semibold">Status</th>
+                      <th className="px-3 py-2.5 font-semibold">Method</th>
+                      <th className="px-3 py-2.5 font-semibold">Path</th>
+                      <th className="hidden px-3 py-2.5 font-semibold sm:table-cell">Client</th>
+                      <th className="hidden px-3 py-2.5 font-semibold md:table-cell">Latency</th>
+                      <th className="hidden px-3 py-2.5 font-semibold lg:table-cell">Time</th>
+                      <th className="px-3 py-2.5 font-semibold">
+                        <span className="sr-only">Bodies</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-black/6 dark:divide-white/8">
+                    {entries.map((entry) => (
+                      <AuditTableRow
+                        key={auditEntryKey(entry)}
+                        entry={entry}
+                        onView={() => void openDetail(entry)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {captureEnabled ? (
-              <footer className="shrink-0 border-t border-black/6 px-[18px] py-3 dark:border-white/8">
-                {totalPages > 1 ? (
-                  <PaginationBar
-                    page={page}
-                    totalPages={totalPages}
-                    total={total}
-                    disabled={isListLoading}
-                    onPrevious={() => goToPage(page - 1)}
-                    onNext={() => goToPage(page + 1)}
-                  />
-                ) : (
-                  <p className="m-0 text-center text-xs text-zinc-500">
-                    {total === 0 ? "No entries" : `${total} ${total === 1 ? "entry" : "entries"}`}
-                  </p>
-                )}
-              </footer>
+              totalPages > 1 ? (
+                <PaginationBar
+                  page={page}
+                  totalPages={totalPages}
+                  total={total}
+                  disabled={isListLoading}
+                  onPrevious={() => goToPage(page - 1)}
+                  onNext={() => goToPage(page + 1)}
+                />
+              ) : (
+                <p className="m-0 text-center text-xs text-zinc-500">
+                  {total === 0 ? "No entries" : `${total} ${total === 1 ? "entry" : "entries"}`}
+                </p>
+              )
             ) : null}
           </PanelBody>
         </Panel>
@@ -174,48 +178,46 @@ export function AuditSection({ active, className }: AuditSectionProps) {
   );
 }
 
-function AuditRow({ entry, onView }: { entry: AuditListItem; onView: () => void }) {
+function AuditTableRow({ entry, onView }: { entry: AuditListItem; onView: () => void }) {
   const tone = statusTone(entry.status);
 
   return (
-    <li className="flex items-center gap-3 py-2.5">
-      <span
-        className={cn(
-          "inline-flex min-w-10 shrink-0 items-center justify-center rounded-md px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums",
-          statusClass[tone],
-        )}
-      >
-        {entry.status}
-      </span>
-
-      <div className="grid min-w-0 flex-1 grid-cols-1 gap-0.5 sm:grid-cols-[auto_1fr_auto] sm:items-center sm:gap-x-3">
-        <span className="font-mono text-xs font-semibold text-zinc-500">{entry.method}</span>
+    <tr className="text-zinc-800 dark:text-zinc-100">
+      <td className="px-3 py-2.5 align-middle">
         <span
-          className="truncate font-mono text-sm text-zinc-800 dark:text-zinc-100"
-          title={entry.path}
+          className={cn(
+            "inline-flex min-w-10 items-center justify-center rounded-md px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums",
+            statusClass[tone],
+          )}
         >
-          {entry.path}
+          {entry.status}
         </span>
-        <span className="text-xs text-zinc-500 sm:text-right">{entry.client_ip}</span>
-      </div>
-
-      <div className="hidden shrink-0 text-right text-xs text-zinc-500 sm:block">
-        <p className="m-0 tabular-nums">{entry.latency_ms} ms</p>
-        <time className="m-0 block whitespace-nowrap" dateTime={new Date(entry.ts_ms).toISOString()}>
-          {formatAuditTime(entry.ts_ms)}
-        </time>
-      </div>
-
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        className="w-auto shrink-0"
-        icon={<Eye size={16} strokeWidth={2} />}
-        onClick={onView}
-      >
-        Bodies
-      </Button>
-    </li>
+      </td>
+      <td className="px-3 py-2.5 align-middle font-mono text-xs font-semibold text-zinc-500">
+        {entry.method}
+      </td>
+      <td className="max-w-[min(24rem,40vw)] truncate px-3 py-2.5 align-middle font-mono text-sm" title={entry.path}>
+        {entry.path}
+      </td>
+      <td className="hidden px-3 py-2.5 align-middle text-xs text-zinc-500 sm:table-cell">{entry.client_ip}</td>
+      <td className="hidden px-3 py-2.5 align-middle text-xs tabular-nums text-zinc-500 md:table-cell">
+        {entry.latency_ms} ms
+      </td>
+      <td className="hidden px-3 py-2.5 align-middle text-xs whitespace-nowrap text-zinc-500 lg:table-cell">
+        <time dateTime={new Date(entry.ts_ms).toISOString()}>{formatAuditTime(entry.ts_ms)}</time>
+      </td>
+      <td className="px-3 py-2.5 align-middle">
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="w-auto"
+          icon={<Eye size={16} strokeWidth={2} />}
+          onClick={onView}
+        >
+          Bodies
+        </Button>
+      </td>
+    </tr>
   );
 }
