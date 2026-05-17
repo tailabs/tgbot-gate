@@ -3,7 +3,7 @@ use std::{env, path::PathBuf};
 
 use axum::{
     body::{to_bytes, Body},
-    extract::{Path, Request, State},
+    extract::{Path, Query, Request, State},
     middleware,
     http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
@@ -17,7 +17,7 @@ use tokio::fs;
 use tower_http::services::ServeDir;
 
 use crate::{
-    audit,
+    audit::{self, AuditRuntime},
     auth::AdminAuth,
     registry::{BotRecord, BotRegistry},
 };
@@ -32,10 +32,16 @@ pub struct AppState {
     proxy: TelegramProxy,
     admin_dist_dir: PathBuf,
     max_proxy_body_bytes: usize,
+    pub audit: AuditRuntime,
 }
 
 impl AppState {
-    pub fn new(registry: BotRegistry, auth: AdminAuth, proxy: TelegramProxy) -> Self {
+    pub fn new(
+        registry: BotRegistry,
+        auth: AdminAuth,
+        proxy: TelegramProxy,
+        audit: AuditRuntime,
+    ) -> Self {
         Self {
             registry,
             auth,
@@ -47,6 +53,7 @@ impl AppState {
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(DEFAULT_MAX_PROXY_BODY_BYTES),
+            audit,
         }
     }
 }
@@ -102,10 +109,103 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/login", post(login))
         .route("/api/bots", get(list_bots).post(register_bot))
         .route("/api/bots/{token_hash}", delete(delete_bot))
+        .route("/api/audit/status", get(audit_status))
+        .route("/api/audit", get(list_audit))
+        .route("/api/audit/{shard}/{id}", get(get_audit))
         .nest_service("/assets", ServeDir::new(assets_dir))
         .fallback(proxy_or_not_found)
-        .layer(middleware::from_fn(audit::log_request))
+        .layer(middleware::from_fn_with_state(
+            state.audit.clone(),
+            audit::middleware,
+        ))
         .with_state(state)
+}
+
+
+
+#[derive(Debug, Deserialize)]
+struct AuditListQuery {
+    page: Option<u32>,
+    page_size: Option<u32>,
+    kind: Option<String>,
+    min_status: Option<u16>,
+    q: Option<String>,
+}
+
+
+#[derive(Debug, Serialize)]
+struct AuditStatusResponse {
+    enabled: bool,
+}
+
+async fn audit_status(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
+    if !is_authorized(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    Json(AuditStatusResponse {
+        enabled: state.audit.store.is_some(),
+    })
+    .into_response()
+}
+
+async fn list_audit(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<AuditListQuery>,
+) -> impl IntoResponse {
+    if !is_authorized(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let Some(store) = state.audit.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "audit capture is not enabled (set AUDIT_CAPTURE=1)",
+        )
+            .into_response();
+    };
+
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
+    let kind = query.kind.as_deref();
+    let search = query.q.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    match store.list(page, page_size, kind, query.min_status, search) {
+        Ok(page) => Json(page).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to list audit entries: {error}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_audit(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((shard, id)): Path<(String, i64)>,
+) -> impl IntoResponse {
+    if !is_authorized(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let Some(store) = state.audit.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "audit capture is not enabled (set AUDIT_CAPTURE=1)",
+        )
+            .into_response();
+    };
+
+    match store.get(&shard, id) {
+        Ok(Some(entry)) => Json(entry).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to load audit entry: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn healthz() -> &'static str {
@@ -363,11 +463,12 @@ mod tests {
 
     fn test_state() -> Arc<AppState> {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.keep().join("bots.json");
+        let db = Arc::new(crate::db::GateDatabase::open(dir.path().join("gate.db")).unwrap());
         Arc::new(AppState::new(
-            BotRegistry::load_or_create(path).unwrap(),
+            BotRegistry::open(db).unwrap(),
             AdminAuth::configured("admin-pass".to_string()),
             TelegramProxy::with_base_url("http://127.0.0.1:1".to_string()),
+            AuditRuntime::from_env(dir.path(), DEFAULT_MAX_PROXY_BODY_BYTES),
         ))
     }
 
@@ -404,11 +505,12 @@ mod tests {
             "<!doctype html><div>admin</div>",
         )
         .unwrap();
-        let registry_path = dir.path().join("bots.json");
+        let db = Arc::new(crate::db::GateDatabase::open(dir.path().join("gate.db")).unwrap());
         let mut state = AppState::new(
-            BotRegistry::load_or_create(registry_path).unwrap(),
+            BotRegistry::open(db).unwrap(),
             AdminAuth::configured("admin-pass".to_string()),
             TelegramProxy::with_base_url("http://127.0.0.1:1".to_string()),
+            AuditRuntime::from_env(dir.path(), DEFAULT_MAX_PROXY_BODY_BYTES),
         );
         state.admin_dist_dir = dir.path().to_path_buf();
 

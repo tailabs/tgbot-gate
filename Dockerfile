@@ -49,7 +49,7 @@ COPY --from=rust-builder /out/tgbot-gate /usr/local/bin/tgbot-gate
 COPY --from=admin-builder /app/admin/dist ./admin/dist
 
 ENV PORT=8080
-ENV DATA_PATH=/app/data/bots.json
+ENV GATE_DB_PATH=/app/data/gate.db
 ENV ADMIN_DIST_DIR=/app/admin/dist
 
 EXPOSE 8080

@@ -1,26 +1,48 @@
 use rand::{distr::Alphanumeric, RngExt};
 
+use crate::db::password_hash;
+
 #[derive(Debug, Clone)]
 pub struct AdminAuth {
-    password: String,
+    password_hash: String,
     session_token: String,
 }
 
 impl AdminAuth {
     pub fn configured(password: String) -> Self {
         Self {
-            password,
+            password_hash: password_hash(&password),
+            session_token: random_secret(48),
+        }
+    }
+
+    pub fn from_stored_hash(password_hash: String) -> Self {
+        Self {
+            password_hash,
             session_token: random_secret(48),
         }
     }
 
     pub fn generated() -> (Self, String) {
         let password = random_secret(24);
-        (Self::configured(password.clone()), password)
+        (
+            Self {
+                password_hash: password_hash(&password),
+                session_token: random_secret(48),
+            },
+            password,
+        )
+    }
+
+    pub fn stored_password_hash(&self) -> &str {
+        &self.password_hash
     }
 
     pub fn verify_password(&self, password: &str) -> bool {
-        constant_time_eq(self.password.as_bytes(), password.as_bytes())
+        constant_time_eq(
+            self.password_hash.as_bytes(),
+            password_hash(password).as_bytes(),
+        )
     }
 
     pub fn session_token(&self) -> &str {
@@ -58,7 +80,6 @@ mod tests {
     #[test]
     fn validates_configured_password() {
         let auth = AdminAuth::configured("admin-pass".to_string());
-
         assert!(auth.verify_password("admin-pass"));
         assert!(!auth.verify_password("wrong-pass"));
     }
@@ -66,7 +87,6 @@ mod tests {
     #[test]
     fn generated_password_is_returned_for_operator() {
         let (auth, password) = AdminAuth::generated();
-
         assert!(password.len() >= 24);
         assert!(auth.verify_password(&password));
     }
@@ -74,7 +94,6 @@ mod tests {
     #[test]
     fn validates_process_session_token() {
         let auth = AdminAuth::configured("admin-pass".to_string());
-
         assert!(auth.verify_session(auth.session_token()));
         assert!(!auth.verify_session("other-session"));
     }

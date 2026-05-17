@@ -1,4 +1,4 @@
-import React, { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, KeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
@@ -9,11 +9,16 @@ import {
   Loader2,
   LockKeyhole,
   Plus,
+  ChevronLeft,
+  ChevronRight,
   RefreshCw,
   ShieldCheck,
   Trash2,
+  ScrollText,
 } from "lucide-react";
 import "./styles.css";
+import { useListPageSize } from "./useListPageSize";
+import { AuditSection } from "./AuditSection";
 
 type BotRecord = {
   token_hash: string;
@@ -30,6 +35,28 @@ type Notice = {
   text: string;
 };
 
+type AppSection = "bots" | "audit";
+
+const MIN_REFRESH_MS = 450;
+
+async function withMinRefreshDuration(run: () => Promise<void>): Promise<void> {
+  const started = Date.now();
+  await run();
+  const remaining = MIN_REFRESH_MS - (Date.now() - started);
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+}
+
+class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -42,7 +69,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Request failed with ${response.status}`);
+    throw new ApiError(response.status, message || `Request failed with ${response.status}`);
   }
 
   if (response.status === 204) {
@@ -60,17 +87,48 @@ function App() {
   const [token, setToken] = useState("");
   const [bots, setBots] = useState<BotRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshingBots, setIsRefreshingBots] = useState(false);
+  const [botsPage, setBotsPage] = useState(1);
+  const [section, setSection] = useState<AppSection>("bots");
   const [notice, setNotice] = useState<Notice>({ kind: "idle", text: "" });
-
+  const botsListViewportRef = useRef<HTMLDivElement>(null);
+  const { pageSize: botsPageSize } = useListPageSize(botsListViewportRef);
+  
   const sortedBots = useMemo(
     () => [...bots].sort((left, right) => right.created_at - left.created_at),
     [bots],
   );
 
+  const botsTotalPages = Math.max(1, Math.ceil(sortedBots.length / botsPageSize));
+
+  const paginatedBots = useMemo(() => {
+    const page = Math.min(botsPage, botsTotalPages);
+    const offset = (page - 1) * botsPageSize;
+    return sortedBots.slice(offset, offset + botsPageSize);
+  }, [sortedBots, botsPage, botsTotalPages, botsPageSize]);
+
+  useEffect(() => {
+    if (botsPage > botsTotalPages) {
+      setBotsPage(botsTotalPages);
+    }
+  }, [botsPage, botsTotalPages]);
+
+  useEffect(() => {
+    setBotsPage(1);
+  }, [botsPageSize]);
+
   const loadBots = useCallback(async () => {
-    const data = await api<BotsResponse>("/api/bots");
-    setBots(data.bots);
+    setIsRefreshingBots(true);
+    try {
+      await withMinRefreshDuration(async () => {
+        const data = await api<BotsResponse>("/api/bots");
+        setBots(data.bots);
+      });
+    } finally {
+      setIsRefreshingBots(false);
+    }
   }, []);
+
 
   useEffect(() => {
     if (!isSignedIn) {
@@ -81,6 +139,7 @@ function App() {
       setNotice({ kind: "error", text: "Refresh failed." });
     });
   }, [isSignedIn, loadBots]);
+
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -115,6 +174,7 @@ function App() {
       setToken("");
       setLabel("");
       setNotice({ kind: "idle", text: "" });
+      setBotsPage(1);
       await loadBots();
     } catch (error) {
       setNotice({
@@ -141,6 +201,7 @@ function App() {
     }
   }
 
+
   const pageTransition = reduceMotion ? { duration: 0 } : { duration: 0.4, ease: [0.25, 0.1, 0.25, 1] as const };
 
   return (
@@ -156,12 +217,12 @@ function App() {
         >
           <main className="login-center">
             <section className="login-panel material" aria-labelledby="login-title">
-              <div className="login-brand">
+              <motion.div className="login-brand">
                 <div className="icon-slot icon-slot--accent" aria-hidden>
                   <ShieldCheck size={22} strokeWidth={1.75} />
                 </div>
                 <h1 id="login-title">TG Bot Gate</h1>
-              </div>
+              </motion.div>
               <form onSubmit={handleLogin} className="stack">
                 <TextInput
                   icon={<LockKeyhole size={18} strokeWidth={1.75} />}
@@ -197,23 +258,30 @@ function App() {
               <span className="sidebar-title">TG Bot Gate</span>
             </div>
             <nav className="sidebar-nav" aria-label="Primary">
-              <span className="nav-item nav-item-active" aria-current="page">
+              <button type="button" className={`nav-item ${section === "bots" ? "nav-item-active" : ""}`} aria-current={section === "bots" ? "page" : undefined} onClick={() => setSection("bots")}>
                 <LayoutDashboard size={17} strokeWidth={1.75} aria-hidden />
-                Overview
-              </span>
+                Bots
+              </button>
+              <button type="button" className={`nav-item ${section === "audit" ? "nav-item-active" : ""}`} aria-current={section === "audit" ? "page" : undefined} onClick={() => setSection("audit")}>
+                <ScrollText size={17} strokeWidth={1.75} aria-hidden />
+                Audit
+              </button>
             </nav>
           </aside>
 
-          <div className="main-column">
+          <div className="main-column main-column--fill">
+            {section === "bots" ? (
+              <div className="bots-workspace">
             <header className="page-header">
               <h1 className="page-title">Bots</h1>
               <IconButton
                 label="Refresh"
-                disabled={isLoading}
-                onClick={() => void loadBots()}
+                className={isRefreshingBots ? "icon-btn--refreshing" : ""}
+                busy={isRefreshingBots}
+                onClick={() => void loadBots().catch(() => setNotice({ kind: "error", text: "Refresh failed." }))}
                 variant="toolbar"
               >
-                {isLoading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <RefreshCw size={15} strokeWidth={2} />}
+                <RefreshCw size={15} strokeWidth={2} aria-hidden />
               </IconButton>
             </header>
 
@@ -223,8 +291,8 @@ function App() {
               <EndpointTile />
             </div>
 
-            <div className="content-stack">
-              <Panel title="Add">
+            <div className="content-stack content-stack--fill">
+              <Panel title="Add" className="panel--compact">
                 <form onSubmit={handleRegister} className="register-form">
                   <TextInput label="Name" value={label} onChange={setLabel} placeholder="Label" required />
                   <TextInput label="Token" value={token} onChange={setToken} placeholder="Bot token" required />
@@ -235,14 +303,70 @@ function App() {
                 <Status notice={notice} />
               </Panel>
 
-              <Panel title="List">
-                <BotList bots={sortedBots} isLoading={isLoading} onDelete={handleDelete} />
+              <Panel title="List" className="panel--fill">
+                <div className="list-viewport" ref={botsListViewportRef}>
+                  <BotList bots={paginatedBots} isLoading={isLoading} onDelete={handleDelete} measureRow={sortedBots.length === 0} />
+                </div>
+                {sortedBots.length > botsPageSize ? (
+                  <PaginationBar
+                    page={Math.min(botsPage, botsTotalPages)}
+                    totalPages={botsTotalPages}
+                    total={sortedBots.length}
+                    disabled={isLoading || isRefreshingBots}
+                    onPrevious={() => setBotsPage((current) => Math.max(1, current - 1))}
+                    onNext={() => setBotsPage((current) => Math.min(botsTotalPages, current + 1))}
+                  />
+                ) : null}
               </Panel>
             </div>
+              </div>
+            ) : (
+              <AuditSection active={section === "audit"} />
+            )}
           </div>
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+function PaginationBar({
+  page,
+  totalPages,
+  total,
+  disabled,
+  onPrevious,
+  onNext,
+}: {
+  page: number;
+  totalPages: number;
+  total: number;
+  disabled?: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  const canGoBack = page > 1 && !disabled;
+  const canGoForward = page < totalPages && !disabled;
+
+  return (
+    <nav className="list-pagination" aria-label="Pagination">
+      <div className="pagination-shell">
+        <IconButton label="Previous page" variant="toolbar" disabled={!canGoBack} onClick={onPrevious}>
+          <ChevronLeft size={16} strokeWidth={2.25} aria-hidden />
+        </IconButton>
+        <div className="pagination-center" aria-live="polite">
+          <p className="pagination-page">
+            <span className="pagination-page-current">{page}</span>
+            <span className="pagination-page-sep">/</span>
+            <span className="pagination-page-total">{totalPages}</span>
+          </p>
+          <p className="pagination-meta">{total} entries</p>
+        </div>
+        <IconButton label="Next page" variant="toolbar" disabled={!canGoForward} onClick={onNext}>
+          <ChevronRight size={16} strokeWidth={2.25} aria-hidden />
+        </IconButton>
+      </div>
+    </nav>
   );
 }
 
@@ -277,6 +401,7 @@ function Button({
 }
 
 function IconButton({
+  busy = false,
   children,
   className = "",
   disabled,
@@ -284,6 +409,7 @@ function IconButton({
   onClick,
   variant = "default",
 }: {
+  busy?: boolean;
   children: ReactNode;
   className?: string;
   disabled?: boolean;
@@ -292,12 +418,14 @@ function IconButton({
   variant?: "default" | "toolbar";
 }) {
   const variantClass = variant === "toolbar" ? "icon-btn icon-btn--toolbar" : "icon-btn";
+  const isDisabled = disabled || busy;
   return (
     <button
       type="button"
       className={`${variantClass} ${className}`.trim()}
-      disabled={disabled}
+      disabled={isDisabled}
       onClick={onClick}
+      aria-busy={busy}
       aria-label={label}
       title={label}
     >
@@ -421,13 +549,15 @@ function Status({ notice }: { notice: Notice }) {
 function BotList({
   bots,
   isLoading,
+  measureRow = false,
   onDelete,
 }: {
   bots: BotRecord[];
   isLoading: boolean;
+  measureRow?: boolean;
   onDelete: (tokenHash: string) => Promise<void>;
 }) {
-  if (bots.length === 0) {
+  if (bots.length === 0 && !measureRow) {
     return (
       <div className="empty-state material-inset">
         <p className="empty-title">None</p>
@@ -437,6 +567,17 @@ function BotList({
 
   return (
     <ul className="grouped-list grouped-list--inset" aria-label="Bots">
+      {measureRow ? (
+        <li className="grouped-row grouped-row--probe" aria-hidden>
+          <div className="row-main">
+            <p className="row-title">Probe</p>
+            <p className="row-meta">
+              <code>0000000000000000000000000000000000000000000000000000000000000000</code>
+            </p>
+            <p className="row-date">—</p>
+          </div>
+        </li>
+      ) : null}
       {bots.map((bot) => (
         <li key={bot.token_hash} className="grouped-row">
           <div className="row-main">

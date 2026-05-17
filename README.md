@@ -57,10 +57,15 @@ http://localhost:8080/admin
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP port for the service |
-| `DATA_PATH` | `data/bots.json` | Bot registry file path |
+| `GATE_DB_PATH` | `data/gate.db` | SQLite database (bots, admin password hash, audit shards) |
+| `DATA_PATH` | `data/bots.json` | Legacy path used only to derive default `GATE_DB_PATH` parent directory |
 | `ADMIN_PASSWORD` | generated at startup | Password for the admin console |
 | `ADMIN_DIST_DIR` | `admin/dist` | Built admin UI directory |
-| `AUDIT_LOG` | `1` (on) | Per-request JSON audit lines on stdout (`audit {...}`); set `0` to disable |
+| `AUDIT_LOG` | `1` (on) | JSON audit lines on stdout for Telegram proxy routes only (`/bot...`); set `0` to disable |
+| `AUDIT_CAPTURE` | `0` (off) | Persist Telegram proxy request/response bodies to `gate.db`; set `1` to enable |
+| `AUDIT_RETENTION_DAYS` | `7` | Drop monthly audit shard tables older than this many days |
+| `AUDIT_ERRORS_ONLY` | `0` (off) | When `1`, only capture entries with HTTP status >= 400 |
+| `AUDIT_MAX_BODY_BYTES` | same as `MAX_PROXY_BODY_BYTES` | Max bytes buffered per request/response body for audit |
 
 If `ADMIN_PASSWORD` is not set, the service generates one at startup and prints it to the logs. Set a fixed password for production.
 
@@ -76,6 +81,18 @@ curl -X POST 'https://your-domain.example/bot123456:ABC/sendMessage' \
 
 Unregistered tokens return `403 Forbidden`.
 
+### Audit list API
+
+When `AUDIT_CAPTURE=1`, `GET /api/audit` supports pagination and search:
+
+| Query | Default | Description |
+| --- | --- | --- |
+| `page` | `1` | Page number (1-based) |
+| `page_size` | `20` | Items per page (max 100) |
+| `q` | — | Search path, method, client IP, or request/response bodies |
+| `kind` | — | `proxy` (only proxy traffic is recorded) |
+| `min_status` | — | Minimum HTTP status code |
+
 ## Railway Deployment
 
 The repository includes:
@@ -87,7 +104,8 @@ Set at least:
 
 ```text
 ADMIN_PASSWORD=<strong-password>
-DATA_PATH=/app/data/bots.json
+GATE_DB_PATH=/app/data/gate.db
+AUDIT_CAPTURE=1
 ```
 
 Railway provides the public domain and HTTPS. The app listens on the `PORT` value provided by the platform.
