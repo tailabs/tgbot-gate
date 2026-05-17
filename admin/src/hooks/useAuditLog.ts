@@ -40,7 +40,7 @@ type FetchPageOptions = {
   minDuration?: boolean;
 };
 
-export const AUDIT_PAGE_SIZE = 20;
+export const AUDIT_PAGE_SIZE = 10;
 
 export function auditEntryKey(item: Pick<AuditListItem, "shard" | "id">): string {
   return `${item.shard}:${item.id}`;

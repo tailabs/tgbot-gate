@@ -80,8 +80,6 @@ export function AuditSection({ active }: AuditSectionProps) {
         <PageHeader title="Audit" />
 
         <Panel>
-          <PanelHeading title="Captured requests" />
-
           <div className="flex flex-wrap items-center gap-2 border-b border-black/6 px-[18px] py-3 dark:border-white/8">
             <label className="flex min-h-10 min-w-[200px] flex-1 items-center gap-2 rounded-[10px] border border-black/6 bg-black/4 px-3 dark:border-white/10 dark:bg-white/6">
               <Search size={16} strokeWidth={2} className="shrink-0 text-zinc-500" aria-hidden />
