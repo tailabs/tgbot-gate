@@ -1,10 +1,8 @@
 # TG Bot Gate
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/Piv1dC?referralCode=kubernetes&utm_medium=integration&utm_source=template&utm_campaign=generic)
-
 TG Bot Gate is a lightweight Telegram Bot API gateway. It lets you register bot tokens in a small admin console and proxies requests only for registered bots.
 
-The service is designed for simple self-hosting: one Rust backend, a built React admin UI, local disk storage, and Railway-friendly deployment.
+The service is designed for simple self-hosting: one Rust backend, a built React admin UI, SQLite on disk, and Railway-friendly deployment.
 
 ## Features
 
@@ -12,7 +10,7 @@ The service is designed for simple self-hosting: one Rust backend, a built React
 - Admin UI for registering and removing bot tokens
 - SHA-256 token hash storage
 - In-memory token hash cache for fast request authorization
-- Local JSON storage with no database requirement
+- SQLite storage for bots, settings, and optional audit capture
 - Docker and Railway deployment support
 
 ## How It Works
@@ -103,23 +101,81 @@ When audit capture is enabled in Settings, `GET /api/audit` supports pagination 
 | `kind` | — | `proxy` (only proxy traffic is recorded) |
 | `min_status` | — | Minimum HTTP status code |
 
-## Railway Deployment
+## Deployment
 
-The repository includes:
+### 1. Railway (one-click)
 
-- `Dockerfile`
-- `railway.json`
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/Piv1dC?referralCode=kubernetes&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
-Set at least:
+1. Click **Deploy on Railway** and connect this repository (or use the template).
+2. Set variables:
+   - `ADMIN_PASSWORD` — strong admin password (required).
+   - `GATE_DB_PATH` — `/app/data/gate.db` (recommended).
+3. Attach a [Railway volume](https://docs.railway.com/guides/volumes) at `/app/data` so SQLite survives redeploys.
+4. Generate a public domain; open `https://<your-domain>/admin` and register bot tokens.
 
-```text
-ADMIN_PASSWORD=<strong-password>
-GATE_DB_PATH=/app/data/gate.db
+Railway sets `PORT` and terminates HTTPS. Enable audit capture under **Settings** after deploy, or set `AUDIT_CAPTURE=1` once before first boot to seed the database.
+
+### 2. Self-hosted Docker
+
+The image is defined in `Dockerfile` (admin UI + Rust binary). CI publishes tags to GitHub Container Registry on `main` and version tags.
+
+**Option A — build on the server**
+
+```bash
+git clone https://github.com/tailabs/tgbot-gate.git
+cd tgbot-gate
+docker build -t tgbot-gate:local .
 ```
 
-Enable audit capture from **Settings** in the admin UI after deploy (or set `AUDIT_CAPTURE=1` once before first boot to seed the database).
+**Option B — pull prebuilt image (after GHCR publish)**
 
-Railway provides the public domain and HTTPS. The app listens on the `PORT` value provided by the platform.
+```bash
+docker pull ghcr.io/tailabs/tgbot-gate:latest
+```
+
+**Run (replace secrets and host port as needed)**
+
+```bash
+docker volume create tgbot-gate-data
+
+docker run -d \
+  --name tgbot-gate \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -e ADMIN_PASSWORD='change-me-to-a-strong-password' \
+  -e GATE_DB_PATH=/app/data/gate.db \
+  -v tgbot-gate-data:/app/data \
+  tgbot-gate:local
+```
+
+Use `ghcr.io/tailabs/tgbot-gate:latest` instead of `tgbot-gate:local` when pulling from GHCR.
+
+**Verify**
+
+```bash
+docker logs tgbot-gate
+curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/healthz
+```
+
+Admin UI: `http://<server-ip>:8080/admin` (put a reverse proxy in front for HTTPS in production).
+
+**Shortcut (Makefile)**
+
+```bash
+ADMIN_PASSWORD='change-me' make docker
+```
+
+This builds `tgbot-gate:local`, creates volume `tgbot-gate-data`, and runs the container on port `8080`.
+
+### Deployment checklist
+
+| Item | Railway | Docker |
+| --- | --- | --- |
+| Admin password | `ADMIN_PASSWORD` variable | `-e ADMIN_PASSWORD=...` |
+| Persistent data | Volume at `/app/data` | `-v tgbot-gate-data:/app/data` |
+| Public URL | Railway domain + HTTPS | Your reverse proxy / firewall |
+| Bot proxy base | `https://<domain>/bot<TOKEN>/...` | `http(s)://<host>/bot<TOKEN>/...` |
 
 ## Development
 
@@ -148,7 +204,7 @@ pnpm run build
 ## Security Notes
 
 - Raw bot tokens are not stored on disk.
-- The registry file contains token hashes, labels, and creation timestamps.
+- The registry stores token hashes, labels, and creation timestamps in SQLite.
 - Admin sessions use an HTTP-only cookie.
 - Keep `ADMIN_PASSWORD` private.
 - Do not commit `.env`, `data/`, `admin/dist/`, or dependency directories.
