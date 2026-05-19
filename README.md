@@ -105,7 +105,7 @@ When audit capture is enabled in Settings, `GET /api/audit` supports pagination 
 
 ### 1. Railway (one-click)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/Piv1dC?referralCode=kubernetes&utm_medium=integration&utm_source=template&utm_campaign=generic)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/telegram-bot-api-gateway?referralCode=kubernetes&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 1. Click **Deploy on Railway** and connect this repository (or use the template).
 2. Set variables:
